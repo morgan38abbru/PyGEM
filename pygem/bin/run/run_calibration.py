@@ -907,6 +907,9 @@ def run(list_packed_vars):
                     nrows_rm = (~mask).sum()  # number of dropped rows
                     for key in ('temp', 'tempstd', 'prec', 'lr'):
                         gdir.historical_climate[key] = gdir.historical_climate[key][nrows_rm:]
+                    # adjust mass balance data indices
+                    gdir.mbdata['t1_idx'] -= nrows_rm
+                    gdir.mbdata['t2_idx'] -= nrows_rm
 
                 # get observation period indices in model date_table
                 # create lookup dict (timestamp → index)

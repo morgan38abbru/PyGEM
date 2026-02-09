@@ -459,6 +459,8 @@ def mcmc_model_eval(
         if mbmod is None:
             glacierwide_mb_mwea = mb_mwea_calc(gdir, modelprms, glacier_rgi_table, fls)
         else:
+            # note that frontal ablation has not been included in the total mass balance here
+            # thus, the glac_wide_massbaltotal can simply be used to compute the glacierwide climatic mass balance
             glacierwide_mb_mwea = (
                 mbmod.glac_wide_massbaltotal[gdir.mbdata['t1_idx'] : gdir.mbdata['t2_idx'] + 1].sum()
                 / mbmod.glac_wide_area_annual[0]

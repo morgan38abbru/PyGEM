@@ -103,6 +103,32 @@ class PyGEMMassBalance(MassBalanceModel):
         else:
             self.debris_ed = np.ones(self.glacier_area_initial.shape[0])
 
+        # Supraglacial lake setup
+        if pygem_prms['mb']['include_supra_lakes']:
+            try:
+                # .copy() is critical: keeps nsims iterations independent when nsims > 1
+                self.supra_lake_coverage = fls[fl_id].supra_lake.copy()
+            except AttributeError:
+                self.supra_lake_coverage = np.zeros(self.glacier_area_initial.shape[0])
+            self.supra_lake_melt_factor = pygem_prms['mb']['supra_lake_melt_factor']
+            # Load slope-dependent annual growth rules from CSV
+            # Expected columns: slope_min_deg, slope_max_deg, growth_rate_annual
+            try:
+                import pandas as _pd
+                _growth_fp = (
+                    pygem_prms['root']
+                    + pygem_prms['mb']['supra_lake_relpath']
+                    + pygem_prms['mb']['supra_lake_growth_fn']
+                )
+                _df = _pd.read_csv(_growth_fp)
+                self._lake_growth_rules = list(zip(
+                    _df['slope_min_deg'].values,
+                    _df['slope_max_deg'].values,
+                    _df['growth_rate_annual'].values,
+                ))
+            except Exception:
+                self._lake_growth_rules = []
+       
         # Climate data
         self.dates_table = gdir.dates_table
         self.glacier_gcm_temp = gdir.historical_climate['temp']
@@ -159,6 +185,8 @@ class PyGEMMassBalance(MassBalanceModel):
         self.glac_wide_volume_annual = np.zeros(self.nyears + 1)
         self.glac_wide_volume_change_ignored_annual = np.zeros(self.nyears)
         self.glac_wide_ELA_annual = np.zeros(self.nyears + 1)
+        self.glac_wide_supra_lake_storage = np.zeros(self.nsteps)
+        self.glac_bin_supra_lake_annual = np.zeros((nbins, self.nyears + 1))
         self.offglac_wide_prec = np.zeros(self.nsteps)
         self.offglac_wide_refreeze = np.zeros(self.nsteps)
         self.offglac_wide_melt = np.zeros(self.nsteps)
@@ -488,6 +516,15 @@ class PyGEMMassBalance(MassBalanceModel):
                 self.bin_meltglac[glac_idx_t0, step] = (
                     self.surfacetype_ddf[glac_idx_t0] * melt_energy_available[glac_idx_t0]
                 )
+
+              # Supraglacial lake melt enhancement
+
+                if pygem_prms['mb']['include_supra_lakes']:
+                    lake_mult = 1.0 + self.supra_lake_coverage * (self.supra_lake_melt_factor - 1.0)
+                    self.surfacetype_ddf[glac_idx_t0] *= lake_mult[glac_idx_t0]
+                self.bin_meltglac[glac_idx_t0, step] = (
+                    self.surfacetype_ddf[glac_idx_t0] * melt_energy_available[glac_idx_t0]
+                )
                 # TOTAL MELT (snow + glacier)
                 #  off-glacier need to include melt of refreeze because there are no glacier dynamics,
                 #  but on-glacier do not need to account for this (simply assume refreeze has same surface type)
@@ -763,6 +800,30 @@ class PyGEMMassBalance(MassBalanceModel):
             )
             # Record binned glacier area
             self.glac_bin_area_annual[:, year_idx] = glacier_area_t0
+            # Supraglacial lake annual update
+            if pygem_prms['mb']['include_supra_lakes']:
+                # Record coverage BEFORE growing so output reflects what was active this year
+                self.glac_bin_supra_lake_annual[:, year_idx] = self.supra_lake_coverage
+                # Grow coverage using slope-dependent annual rates
+                if self._lake_growth_rules and np.any(self.supra_lake_coverage > 0):
+                    surf_h = fls[fl_id].surface_h
+                    dx_m = fls[fl_id].dx_meter
+                    # Forward-difference slope; last bin copies second-to-last
+                    ror = np.zeros_like(surf_h)
+                    ror[:-1] = (surf_h[:-1] - surf_h[1:]) / dx_m
+                    ror[-1] = ror[-2]
+                    slopes_deg = np.degrees(np.arctan(np.abs(ror)))
+                    for bin_idx in np.where(self.supra_lake_coverage > 0)[0]:
+                        rate = 0.0
+                        for s_min, s_max, r in self._lake_growth_rules:
+                            if s_min <= slopes_deg[bin_idx] < s_max:
+                                rate = r
+                                break
+                        if rate > 0.0:
+                            self.supra_lake_coverage[bin_idx] = min(
+                                self.supra_lake_coverage[bin_idx] * (1.0 + rate), 1.0
+                            )
+
             # Store glacier-wide results
             self._convert_glacwide_results(
                 year_idx,
@@ -920,6 +981,22 @@ class PyGEMMassBalance(MassBalanceModel):
                 + self.glac_wide_melt[t_start : t_stop + 1]
                 - self.glac_wide_refreeze[t_start : t_stop + 1]
             )
+
+            # Supraglacial lake storage correction
+            if pygem_prms['mb']['include_supra_lakes'] and self.supra_lake_coverage[glac_idx].sum() > 0:
+                cov = self.supra_lake_coverage[glac_idx]
+                extra_frac = (
+                    cov * (self.supra_lake_melt_factor - 1.0)
+                    / (1.0 + cov * (self.supra_lake_melt_factor - 1.0))
+                )
+                # Bin-level melt over the time period (m w.e. × m2 = m3 w.e.)
+                bin_melt_period = (
+                    self.glac_bin_melt[glac_idx, t_start : t_stop + 1]
+                    * glacier_area_steps[glac_idx]
+                )
+                lake_storage = (extra_frac[:, np.newaxis] * bin_melt_period).sum(0)
+                self.glac_wide_supra_lake_storage[t_start : t_stop + 1] = lake_storage
+                self.glac_wide_runoff[t_start : t_stop + 1] -= lake_storage
 
             # Snow line altitude (m a.s.l.)
             heights_steps = heights[:, np.newaxis].repeat((t_stop + 1) - t_start, axis=1)

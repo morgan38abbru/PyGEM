@@ -13,7 +13,7 @@
 #########################################################
 
 # ===== ROOT PATH =====
-root: /path/to/pygem/data/                        # note, this parameter must be modfied as to point to the appropriate location. all other paths are assumed relative to this (inputs and outputs).
+root: /Users/mabbrusc/PyGEM/pygem_data                   # note, this parameter must be modfied as to point to the appropriate location. all other paths are assumed relative to this (inputs and outputs).
 
 # ===== USER INFO =====
 user:
@@ -289,7 +289,11 @@ mb:
   include_debris: true                            # true: account for debris with melt factors, false: do not account for debris
   # debris datasets
   debris_relpath: /debris_data/
-
+  include_supra_lakes: true                       # true: account for supraglacial lakes with melt factors, false: do not account for supraglacial lakes
+  # Supraglacial lakes data / melt factor
+  supra_lake_relpath: /lake_data/
+  supra_lake_growth_fn: lake_growth_rates.csv 
+  supra_lake_melt_factor: 1940                    # average melt enhancement of supraglacial lakes relative to surrounding clean ice (from field studies in Miles et al. 2018, 2022)
   # Downscaling model options
   # Reference elevation options for downscaling climate variables
   option_elev_ref_downscale: Zmed                 # 'Zmed', 'Zmax', or 'Zmin' for median, maximum or minimum glacier elevations

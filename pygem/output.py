@@ -589,6 +589,18 @@ class glacierwide_stats(single_glacier):
                 'temporal_resolution': self.timestep,
                 'comment': 'snow remaining accounting for new accumulation, melt, and refreeze',
             }
+            self.output_coords_dict['glac_supra_lake_storage'] = collections.OrderedDict(
+                [('glac', self.glac_values), ('time', self.time_values)]
+            )
+            self.output_attrs_dict['glac_supra_lake_storage'] = {
+                'long_name': 'glacier-wide supraglacial lake storage, in water equivalent',
+                'units': 'm3',
+                'temporal_resolution': self.timestep,
+                'comment': (
+                    'melt water diverted into supraglacial lake storage rather than exported as runoff; '
+                    'glac_runoff is reduced by this amount each time step'
+                ),
+            }
 
             # if nsims > 1, store median-absolute deviation metrics
             if self.nsims > 1:
@@ -841,6 +853,22 @@ class binned_stats(single_glacier):
             'units': 'm',
             'temporal_resolution': self.timestep,
             'comment': 'climatic mass balance from the PyGEM mass balance module',
+        }
+        self.output_coords_dict['bin_supra_lake_annual'] = collections.OrderedDict(
+            [
+                ('glac', self.glac_values),
+                ('bin', self.bin_values),
+                ('year', self.year_values),
+            ]
+        )
+        self.output_attrs_dict['bin_supra_lake_annual'] = {
+            'long_name': 'binned supraglacial lake fractional coverage',
+            'units': '-',
+            'temporal_resolution': 'annual',
+            'comment': (
+                'fraction of each elevation bin covered by supraglacial lakes (0-1); '
+                'recorded at the start of each model year, before the annual growth step'
+            ),
         }
 
         # optionally store binned mass balance components

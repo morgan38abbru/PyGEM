@@ -56,7 +56,7 @@ from pygem.oggm_compat import (
 )
 from pygem.output import calc_stats_array
 from pygem.plot import graphics
-from pygem.shop import debris
+from pygem.shop import debris, lake
 from pygem.utils._funcs import str2bool
 
 cfg.PARAMS['hydro_month_nh'] = 1
@@ -852,6 +852,8 @@ def run(list_packed_vars):
                 output_offglac_snowpack_steps = np.zeros((dates_table.shape[0], nsims)) * np.nan
                 output_offglac_runoff_steps = np.zeros((dates_table.shape[0], nsims)) * np.nan
                 output_glac_bin_icethickness_annual = None
+                output_glac_supra_lake_storage_steps = np.zeros((dates_table.shape[0], nsims)) * np.nan
+                output_glac_bin_supra_lake_annual = None
 
                 # Loop through model parameters
                 count_exceed_boundary_errors = 0
@@ -944,6 +946,9 @@ def run(list_packed_vars):
                                     debris.debris_binned(
                                         gdir, fl_str='model_flowlines'
                                     )  # add debris enhancement factors to flowlines
+                                if pygem_prms['mb']['include_supra_lakes']:
+                                    lake.supra_lake_to_gdir(gdir)
+                                    lake.supra_lake_binned(gdir, fl_str='model_flowlines')
                                 nfls = gdir.read_pickle('model_flowlines')
                             except:
                                 raise
@@ -1235,11 +1240,12 @@ def run(list_packed_vars):
                         )
                         output_glac_ELA_annual[:, n_iter] = mbmod.glac_wide_ELA_annual
                         output_offglac_prec_steps[:, n_iter] = mbmod.offglac_wide_prec
-
                         output_offglac_refreeze_steps[:, n_iter] = mbmod.offglac_wide_refreeze
                         output_offglac_melt_steps[:, n_iter] = mbmod.offglac_wide_melt
                         output_offglac_snowpack_steps[:, n_iter] = mbmod.offglac_wide_snowpack
                         output_offglac_runoff_steps[:, n_iter] = mbmod.offglac_wide_runoff
+                        output_glac_supra_lake_storage_steps[:, n_iter] = mbmod.glac_wide_supra_lake_storage
+
                         # binned ouputs
                         if args.option_dynamics == 'OGGM':
                             # grab binned outputs from oggm flowline diagnostics
@@ -1305,6 +1311,8 @@ def run(list_packed_vars):
                             output_glac_bin_melt_steps_sim = np.zeros(mbmod.glac_bin_melt.shape)
                             output_glac_bin_melt_steps_sim = mbmod.glac_bin_melt
                             output_glac_bin_melt_steps = output_glac_bin_melt_steps_sim[:, :, np.newaxis]
+                            # supra
+                            output_glac_bin_supra_lake_annual = (mbmod.glac_bin_supra_lake_annual[:, :, np.newaxis])
 
                         else:
                             output_glac_bin_area_annual = np.append(
@@ -1358,6 +1366,12 @@ def run(list_packed_vars):
                             output_glac_bin_refreeze_steps = np.append(
                                 output_glac_bin_refreeze_steps,
                                 output_glac_bin_refreeze_steps_sim[:, :, np.newaxis],
+                                axis=2,
+                            )
+                            # supra
+                            output_glac_bin_supra_lake_annual = np.append(
+                                output_glac_bin_supra_lake_annual,
+                                mbmod.glac_bin_supra_lake_annual[:, :, np.newaxis],
                                 axis=2,
                             )
 
@@ -1433,6 +1447,9 @@ def run(list_packed_vars):
                                 output_ds_all_stats['offglac_snowpack'].values[0, :] = output_offglac_snowpack_steps[
                                     :, n_iter
                                 ]
+                                output_ds_all_stats['glac_supra_lake_storage'].values[0, :] = (
+                                    output_glac_supra_lake_storage_steps[:, n_iter]
+                                )
 
                             # export glacierwide stats for iteration
                             output_stats.set_fn(base_fn.replace('SETS', f'set{n_iter}') + args.outputfn_sfix + 'all.nc')
@@ -1484,6 +1501,7 @@ def run(list_packed_vars):
                         output_offglac_melt_steps_stats = calc_stats_array(output_offglac_melt_steps)
                         output_offglac_refreeze_steps_stats = calc_stats_array(output_offglac_refreeze_steps)
                         output_offglac_snowpack_steps_stats = calc_stats_array(output_offglac_snowpack_steps)
+                        output_glac_supra_lake_storage_stats = calc_stats_array(output_glac_supra_lake_storage_steps)
 
                     # output mean/median from all simulations
                     output_ds_all_stats['glac_runoff'].values[0, :] = output_glac_runoff_steps_stats[:, 0]
@@ -1512,6 +1530,9 @@ def run(list_packed_vars):
                         output_ds_all_stats['offglac_melt'].values[0, :] = output_offglac_melt_steps_stats[:, 0]
                         output_ds_all_stats['offglac_refreeze'].values[0, :] = output_offglac_refreeze_steps_stats[:, 0]
                         output_ds_all_stats['offglac_snowpack'].values[0, :] = output_offglac_snowpack_steps_stats[:, 0]
+                        output_ds_all_stats['glac_supra_lake_storage'].values[0, :] = (
+                            output_glac_supra_lake_storage_stats[:, 0]
+                        )
 
                     # output median absolute deviation
                     if nsims > 1:
@@ -1615,6 +1636,9 @@ def run(list_packed_vars):
                                 output_ds_binned_stats['bin_massbalclim'].values[0, :, :] = (
                                     output_glac_bin_massbalclim_steps[:, :, n_iter]
                                 )
+                                output_ds_binned_stats['bin_supra_lake_annual'].values[0, :, :] = (
+                                    output_glac_bin_supra_lake_annual[:, :, n_iter]
+                                )
                                 if args.export_binned_components:
                                     output_ds_binned_stats['bin_accumulation'].values[0, :, :] = (
                                         output_glac_bin_acc_steps[:, :, n_iter]
@@ -1673,6 +1697,9 @@ def run(list_packed_vars):
                         )[np.newaxis, :, :]
                         output_ds_binned_stats['bin_massbalclim'].values = np.median(
                             output_glac_bin_massbalclim_steps, axis=2
+                        )[np.newaxis, :, :]
+                        output_ds_binned_stats['bin_supra_lake_annual'].values = np.median(
+                            output_glac_bin_supra_lake_annual, axis=2
                         )[np.newaxis, :, :]
                         if args.export_binned_components:
                             output_ds_binned_stats['bin_accumulation'].values = np.median(

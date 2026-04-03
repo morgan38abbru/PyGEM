@@ -1032,7 +1032,10 @@ def run(list_packed_vars):
                                 fs=fs,
                                 is_tidewater=True,
                                 water_level=water_level,
+                                moraine_idx=_moraine_idx,
                             )
+                            if debug:
+                                ev_model._lake_debug = True
                         # FluxBasedModel is older numerical scheme but includes frontal ablation
                         elif gdir.is_tidewater:
                             ev_model = FluxBasedModel(
@@ -1044,16 +1047,28 @@ def run(list_packed_vars):
                                 is_tidewater=gdir.is_tidewater,
                                 water_level=water_level,
                             )
-                        # SemiImplicitModel is newer numerical solver, but does not yet include frontal ablation
+                        # Land-terminating: use FluxBasedModel when lake formation monitoring is
+                        # enabled (required for xr.concat compatibility), otherwise SemiImplicitModel
                         else:
                             cfg.PARAMS['use_kcalving_for_run'] = False
-                            ev_model = SemiImplicitModel(
-                                nfls,
-                                y0=args.sim_startyear,
-                                mb_model=mbmod,
-                                glen_a=glen_a,
-                                fs=fs,
-                            )
+                            if pygem_prms['setup'].get('enable_lake_formation', False):
+                                ev_model = FluxBasedModel(
+                                    nfls,
+                                    y0=args.sim_startyear,
+                                    mb_model=mbmod,
+                                    glen_a=glen_a,
+                                    fs=fs,
+                                    is_tidewater=False,
+                                    water_level=None,
+                                )
+                            else:
+                                ev_model = SemiImplicitModel(
+                                    nfls,
+                                    y0=args.sim_startyear,
+                                    mb_model=mbmod,
+                                    glen_a=glen_a,
+                                    fs=fs,
+                                )
 
                         if debug:
                             fig, ax = plt.subplots(1)
@@ -1061,56 +1076,183 @@ def run(list_packed_vars):
                                 ev_model, ax=ax, lnlabel=f'Glacier year {args.sim_startyear}'
                             )
 
-                        diag, ds = ev_model.run_until_and_store(args.sim_endyear + 1, fl_diag_path=True)
+                        # ===== RUN DYNAMICS =====
+                        # For CSV lake glaciers and tidewater: run straight through
+                        if is_lake_glacier or gdir.is_tidewater:
+                            diag, ds = ev_model.run_until_and_store(
+                                args.sim_endyear + 1, fl_diag_path=True
+                            )
+
+                        # For land-terminating: optionally detect new lake formation
+                        else:
+                            lake_formation_info = None
+                            if pygem_prms['setup'].get('enable_lake_formation', False):
+                                threshold_depth = pygem_prms['setup'].get(
+                                    'lake_formation_threshold_depth', 20.0
+                                )
+                                lake_formation_info = lake.detect_lake_formation_potential(
+                                    nfls, threshold_depth=threshold_depth
+                                )
+                                if lake_formation_info is not None and debug:
+                                    print(f'\n✓ LAKE FORMATION POTENTIAL DETECTED')
+                                    print(f"  Moraine elevation: {lake_formation_info['moraine_elevation']:.1f} m")
+                                    print(f"  Activation threshold: {lake_formation_info['lake_water_level']:.1f} m")
+                                    print(f"  Monitoring {len(lake_formation_info['overdeepened_bins'])} overdeepened bins\n")
+
+                            if lake_formation_info is not None:
+                                od_bins = lake_formation_info['overdeepened_bins']
+                                threshold = lake_formation_info['lake_water_level']
+
+                                # Year-by-year detection loop
+                                for year in range(args.sim_startyear, args.sim_endyear + 1):
+                                    ev_model.run_until(year + 1)
+                                    current_surface = ev_model.fls[0].surface_h
+
+                                    if debug and (year - args.sim_startyear) % 10 == 0:
+                                        min_surface = current_surface[od_bins].min()
+                                        print(
+                                            f'Year {year}: min surface in OD = {min_surface:.1f}m, '
+                                            f'threshold = {threshold:.1f}m'
+                                        )
+
+                                    triggered = [b for b in od_bins if current_surface[b] <= threshold]
+                                    if triggered:
+                                        lake_formed_dynamically = True
+                                        year_stopped = year - 1
+                                        seed_bin = int(max(triggered))
+                                        if debug:
+                                            print(
+                                                f'Lake formation triggered at year {year_stopped}, '
+                                                f'seed_bin={seed_bin}'
+                                            )
+                                        break
+
+                            if lake_formed_dynamically:
+                                # Phase 1: clean land-terminating run to lake formation year
+                                ev_model_land = FluxBasedModel(
+                                    nfls,
+                                    y0=args.sim_startyear,
+                                    mb_model=mbmod,
+                                    glen_a=glen_a,
+                                    fs=fs,
+                                    is_tidewater=False,
+                                    water_level=None,
+                                )
+                                diag_land, ds_land = ev_model_land.run_until_and_store(
+                                    year_stopped, fl_diag_path=True
+                                )
+
+                                # Phase 2: lake-terminating run from land state
+                                calving_k_lake = pygem_prms['setup'].get(
+                                    'lake_formation_calving_k', 0.3
+                                )
+                                cfg.PARAMS['calving_k'] = calving_k_lake
+                                cfg.PARAMS['use_kcalving_for_run'] = True
+
+                                _terminus_bins = np.where(ev_model_land.fls[0].thick > 1.0)[0]
+                                _moraine_idx = (
+                                    _terminus_bins[-1] + 1 if len(_terminus_bins) > 0 else None
+                                )
+
+                                ev_model_lake = LakeFluxBasedModel(
+                                    copy.deepcopy(ev_model_land.fls),
+                                    y0=year_stopped,
+                                    mb_model=mbmod,
+                                    glen_a=glen_a,
+                                    fs=fs,
+                                    is_tidewater=True,
+                                    water_level=lake_formation_info['lake_water_level'],
+                                    moraine_idx=_moraine_idx,
+                                    use_empirical_depth=True,
+                                    initial_seed_bin=seed_bin,
+                                )
+                                if debug:
+                                    ev_model_lake._lake_debug = True
+
+                                diag_lake, ds_lake = ev_model_lake.run_until_and_store(
+                                    args.sim_endyear + 1, fl_diag_path=True
+                                )
+
+                                # Drop duplicate boundary timestep then concat
+                                diag_lake = diag_lake.isel(time=slice(1, None))
+                                ds_lake = [ds_lake[0].isel(time=slice(1, None))]
+                                diag = xr.concat([diag_land, diag_lake], dim='time')
+                                ds = [xr.concat([ds_land[0], ds_lake[0]], dim='time')]
+                                ev_model = ev_model_lake
+
+                            else:
+                                # No lake formed — run normally to completion
+                                diag, ds = ev_model.run_until_and_store(
+                                    args.sim_endyear + 1, fl_diag_path=True
+                                )
+
                         ev_model.mb_model.glac_wide_volume_annual[-1] = diag.volume_m3[-1]
                         ev_model.mb_model.glac_wide_area_annual[-1] = diag.area_m2[-1]
 
-                        # Record frontal ablation for tidewater glaciers and update total mass balance
-                        if gdir.is_tidewater or is_lake_glacier:
-                            # Glacier-wide frontal ablation (m3 w.e.)
-                            # - note: diag.calving_m3 is cumulative calving
-                            if debug:
-                                print('\n\ndiag.calving_m3:', diag.calving_m3.values)
-                                print(
-                                    'calving_m3_since_y0:',
-                                    ev_model.calving_m3_since_y0,
-                                )
-                            calving_m3_annual = (
-                                (diag.calving_m3.values[1:] - diag.calving_m3.values[0:-1])
-                                * pygem_prms['constants']['density_ice']
-                                / pygem_prms['constants']['density_water']
-                            )
-                            for n, year in enumerate(np.arange(args.sim_startyear, args.sim_endyear + 1)):
-                                tstart, tstop = ev_model.mb_model.get_step_inds(year)
-                                ev_model.mb_model.glac_wide_frontalablation[tstop] = calving_m3_annual[n]
+                        # --- TEMPORARY: check terminus retreat ---
+                        if debug and (lake_formed_dynamically or is_lake_glacier):
+                            _final_thick = ev_model.fls[0].thick
+                            _ice_bins_final = np.where(_final_thick > 0)[0]
+                            if len(_ice_bins_final) > 0:
+                                print(f'\n  Terminus retreat check:')
+                                print(f'    Final terminus bin: {_ice_bins_final[-1]}')
+                                print(f'    Initial terminus was ~bin: {np.where(nfls[0].thick > 1.0)[0][-1]}')
+                                print(f'    Bins with ice removed: {np.where(nfls[0].thick > 1.0)[0][-1] - _ice_bins_final[-1]}')
+                                print(f'    Remaining bucket: {ev_model.fls[0].calving_bucket_m3:.2f} m3')
+                                if hasattr(ev_model, '_lake_area_m2'):
+                                    print(f'    Lake area: {ev_model._lake_area_m2:.0f} m2')
+                                    print(f'    d_emp: {ev_model._empirical_depth():.2f} m')
+                                    print(f'    Empirical phase complete: {ev_model._empirical_phase_complete}')
+                            else:
+                                print('  Glacier fully consumed!')
 
-                            # Glacier-wide total mass balance (m3 w.e.)
-                            ev_model.mb_model.glac_wide_massbaltotal = (
-                                ev_model.mb_model.glac_wide_massbaltotal - ev_model.mb_model.glac_wide_frontalablation
-                            )
+                        # Record frontal ablation for tidewater, CSV lake, and newly-formed lake glaciers
+                        if gdir.is_tidewater or is_lake_glacier or lake_formed_dynamically:
+                            if 'calving_m3' in diag:
+                                # Glacier-wide frontal ablation (m3 w.e.)
+                                # - note: diag.calving_m3 is cumulative calving
+                                if debug:
+                                    print('\n\ndiag.calving_m3:', diag.calving_m3.values)
+                                    print(
+                                        'calving_m3_since_y0:',
+                                        ev_model.calving_m3_since_y0,
+                                    )
+                                calving_m3_annual = (
+                                    (diag.calving_m3.values[1:] - diag.calving_m3.values[0:-1])
+                                    * pygem_prms['constants']['density_ice']
+                                    / pygem_prms['constants']['density_water']
+                                )
+                                for n, year in enumerate(np.arange(args.sim_startyear, args.sim_endyear + 1)):
+                                    tstart, tstop = ev_model.mb_model.get_step_inds(year)
+                                    ev_model.mb_model.glac_wide_frontalablation[tstop] = calving_m3_annual[n]
 
-                            if debug:
-                                print(
-                                    'avg calving_m3:',
-                                    calving_m3_annual.sum() / nyears,
+                                # Glacier-wide total mass balance (m3 w.e.)
+                                ev_model.mb_model.glac_wide_massbaltotal = (
+                                    ev_model.mb_model.glac_wide_massbaltotal - ev_model.mb_model.glac_wide_frontalablation
                                 )
-                                print(
-                                    'avg frontal ablation [Gta]:',
-                                    np.round(
-                                        ev_model.mb_model.glac_wide_frontalablation.sum() / 1e9 / nyears,
-                                        4,
-                                    ),
-                                )
-                                print(
-                                    'avg frontal ablation [Gta]:',
-                                    np.round(
-                                        ev_model.calving_m3_since_y0
-                                        * pygem_prms['constants']['density_ice']
-                                        / 1e12
-                                        / nyears,
-                                        4,
-                                    ),
-                                )
+
+                                if debug:
+                                    print(
+                                        'avg calving_m3:',
+                                        calving_m3_annual.sum() / nyears,
+                                    )
+                                    print(
+                                        'avg frontal ablation [Gta]:',
+                                        np.round(
+                                            ev_model.mb_model.glac_wide_frontalablation.sum() / 1e9 / nyears,
+                                            4,
+                                        ),
+                                    )
+                                    print(
+                                        'avg frontal ablation [Gta]:',
+                                        np.round(
+                                            ev_model.calving_m3_since_y0
+                                            * pygem_prms['constants']['density_ice']
+                                            / 1e12
+                                            / nyears,
+                                            4,
+                                        ),
+                                    )
 
                     ######################################
                     ##### mass redistribution model  #####
@@ -1779,6 +1921,9 @@ def run(list_packed_vars):
                         output_binned.save_xr_ds()
 
         except Exception as err:
+            import traceback
+            tb_str = traceback.format_exc()
+            print(f'\n*** {glacier_str} FAILED: {err}\n{tb_str}')
             # LOG FAILURE
             fail_fp = pygem_prms['root'] + '/Output/simulations/failed/' + reg_str + '/' + sim_climate_name + '/'
             if sim_climate_name not in ['ERA5', 'COAWST']:
@@ -1787,7 +1932,7 @@ def run(list_packed_vars):
                 os.makedirs(fail_fp, exist_ok=True)
             txt_fn_fail = glacier_str + '-sim_failed.txt'
             with open(fail_fp + txt_fn_fail, 'w') as text_file:
-                text_file.write(glacier_str + f' failed to complete simulation: {err}')
+                text_file.write(glacier_str + f' failed to complete simulation: {err}\n{tb_str}')
 
 
 # %% PARALLEL PROCESSING

@@ -833,14 +833,12 @@ class binned_stats(single_glacier):
                 ('year', self.year_values),
             ]
         )
-        self.output_attrs_dict['bin_massbalclim_annual'] = (
-            {
-                'long_name': 'binned climatic mass balance, in water equivalent',
-                'units': 'm',
-                'temporal_resolution': 'annual',
-                'comment': 'climatic mass balance is computed before dynamics so can theoretically exceed ice thickness',
-            },
-        )
+        self.output_attrs_dict['bin_massbalclim_annual'] = {
+            'long_name': 'binned climatic mass balance, in water equivalent',
+            'units': 'm',
+            'temporal_resolution': 'annual',
+            'comment': 'climatic mass balance is computed before dynamics so can theoretically exceed ice thickness',
+        }
         self.output_coords_dict['bin_massbalclim'] = collections.OrderedDict(
             [
                 ('glac', self.glac_values),

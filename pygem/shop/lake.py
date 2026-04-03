@@ -162,3 +162,74 @@ def supra_lake_binned(gdir, fl_str='inversion_flowlines', filesuffix=''):
 
         # Overwrite pickle
         gdir.write_pickle(flowlines, fl_str, filesuffix=filesuffix)
+
+# ============================================================================
+# DYNAMIC PROGLACIAL LAKE FORMATION DETECTION
+# ============================================================================
+
+def detect_lake_formation_potential(fls, threshold_depth=20.0):
+    """
+    Detect if glacier has potential for proglacial lake formation.
+
+    Uses "highest point downstream" algorithm to find terminal moraine,
+    then identifies all bins in the overdeepening for monitoring.
+
+    Parameters
+    ----------
+    fls : list of oggm.Flowline
+        Glacier flowlines from OGGM
+    threshold_depth : float, optional
+        Depth below moraine crest to trigger lake formation (default: 20m)
+
+    Returns
+    -------
+    dict or None
+        If lake potential exists, returns dict with:
+        - 'moraine_elevation': elevation of terminal moraine [m]
+        - 'lake_water_level': water level (moraine - threshold_depth) [m]
+        - 'overdeepened_bins': array of bin indices to monitor
+
+        Returns None if no lake potential detected.
+    """
+    if len(fls) > 1:
+        log.warning('Multi-flowline glacier - using main flowline only for lake detection')
+
+    fl = fls[0]
+    bed = fl.bed_h
+    thickness = fl.thick
+
+    # Find terminus (last bin with ice > 1m)
+    terminus_bins = np.where(thickness > 1.0)[0]
+    if len(terminus_bins) == 0:
+        return None
+
+    terminus_idx = terminus_bins[-1]
+
+    # Check if glacier extends to end of flowline
+    if terminus_idx >= len(bed) - 1:
+        return None
+
+    # Moraine elevation is the max of the last ice bin and the one right after
+    moraine_elev = max(bed[terminus_idx], bed[terminus_idx + 1])
+
+    # Find continuously overdeepened bins walking upstream from terminus
+    # Stop as soon as bed rises above moraine elevation
+    overdeepened_bins = []
+    for i in range(terminus_idx, -1, -1):
+        if bed[i] < moraine_elev:
+            overdeepened_bins.append(i)
+        else:
+            break
+    overdeepened_bins = np.array(overdeepened_bins)
+
+    if len(overdeepened_bins) == 0:
+        return None
+
+    # Water level when lake activates
+    lake_water_level = moraine_elev - threshold_depth
+
+    return {
+        'moraine_elevation': float(moraine_elev),
+        'lake_water_level': float(lake_water_level),
+        'overdeepened_bins': overdeepened_bins,
+    }

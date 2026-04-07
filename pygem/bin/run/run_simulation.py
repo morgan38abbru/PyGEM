@@ -1105,7 +1105,8 @@ def run(list_packed_vars):
                                         is_tidewater=True,
                                         water_level=lake_formation_info['lake_water_level'],
                                         moraine_elev=lake_formation_info['moraine_elevation'],
-                                    )
+                                        initial_seed_bin=seed_bin,           # <-- add this
+)
                                     diag_lake, ds_lake = ev_model_lake.run_until_and_store(
                                         args.sim_endyear + 1, fl_diag_path=True
                                     )

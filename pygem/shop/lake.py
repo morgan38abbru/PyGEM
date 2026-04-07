@@ -210,3 +210,57 @@ def load_lake_calving_data(pygem_prms, rgiid):
         'water_level': float(row['water_level']),
         'moraine_elev': moraine_elev,
     }
+
+def detect_lake_formation_potential(fls, threshold_depth=20.0):
+    """
+    Detect whether a glacier has potential for proglacial lake formation.
+
+    Identifies the terminal moraine as the highest bed elevation at or just
+    downstream of the terminus (last bin with ice thickness > 1 m).
+    The overdeepened zone is all contiguous bins upstream of the terminus
+    whose bed elevation is below the moraine.
+
+    Parameters
+    ----------
+    fls : list of oggm.Flowline
+    threshold_depth : float
+        Depth below moraine crest at which calving activates [m] (default 20)
+
+    Returns
+    -------
+    dict or None
+        {'moraine_elevation': float,
+         'lake_water_level': float,
+         'overdeepened_bins': np.ndarray of int}
+        Returns None if no overdeepening is found.
+    """
+    fl = fls[0]
+    bed = fl.bed_h
+    thickness = fl.thick
+
+    terminus_bins = np.where(thickness > 1.0)[0]
+    if len(terminus_bins) == 0:
+        return None
+
+    terminus_idx = int(terminus_bins[-1])
+    if terminus_idx >= len(bed) - 1:
+        return None
+
+    moraine_elev = max(bed[terminus_idx], bed[terminus_idx + 1])
+
+    overdeepened_bins = []
+    for i in range(terminus_idx, -1, -1):
+        if bed[i] < moraine_elev:
+            overdeepened_bins.append(i)
+        else:
+            break
+    overdeepened_bins = np.array(overdeepened_bins)
+
+    if len(overdeepened_bins) == 0:
+        return None
+
+    return {
+        'moraine_elevation': float(moraine_elev),
+        'lake_water_level': float(moraine_elev - threshold_depth),
+        'overdeepened_bins': overdeepened_bins,
+    }

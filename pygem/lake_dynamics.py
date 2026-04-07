@@ -163,3 +163,8 @@ class LakeFluxBasedModel(FluxBasedModel):
         h = fl.thick[idx]
         d = h - (fl.surface_h[idx] - self._fallback_water_level)
         return (d if d > 0 else None), idx
+    
+# Alias: new forming lakes use same calving logic as existing lakes
+# (empirical ramp-up is added in Phase 3; for now, switch to standard
+#  sequential calving immediately at lake formation)
+NewLakeFluxBasedModel = LakeFluxBasedModel

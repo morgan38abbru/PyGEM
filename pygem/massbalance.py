@@ -804,16 +804,41 @@ class PyGEMMassBalance(MassBalanceModel):
             if pygem_prms['mb']['include_supra_lakes']:
                 # Record coverage BEFORE growing so output reflects what was active this year
                 self.glac_bin_supra_lake_annual[:, year_idx] = self.supra_lake_coverage
-                # Grow coverage using slope-dependent annual rates
+                # Grow coverage using slope-dependent annual rates,
+                # restricted to bins within the overdeepening
                 if self._lake_growth_rules and np.any(self.supra_lake_coverage > 0):
                     surf_h = fls[fl_id].surface_h
                     dx_m = fls[fl_id].dx_meter
+                    bed_h = fls[fl_id].bed_h
+                    thick = fls[fl_id].thick
+
+                    # Build overdeepening mask using same logic as detect_lake_formation_potential
+                    terminus_bins = np.where(thick > 1.0)[0]
+                    if len(terminus_bins) > 0:
+                        terminus_idx = int(terminus_bins[-1])
+                        moraine_elev = max(
+                            bed_h[terminus_idx],
+                            bed_h[terminus_idx + 1] if terminus_idx < len(bed_h) - 1
+                            else bed_h[terminus_idx]
+                        )
+                        overdeepening_mask = np.zeros(len(bed_h), dtype=bool)
+                        for i in range(terminus_idx, -1, -1):
+                            if bed_h[i] < moraine_elev:
+                                overdeepening_mask[i] = True
+                            else:
+                                break
+                    else:
+                        overdeepening_mask = np.zeros(len(bed_h), dtype=bool)
+
                     # Forward-difference slope; last bin copies second-to-last
                     ror = np.zeros_like(surf_h)
                     ror[:-1] = (surf_h[:-1] - surf_h[1:]) / dx_m
                     ror[-1] = ror[-2]
                     slopes_deg = np.degrees(np.arctan(np.abs(ror)))
+
                     for bin_idx in np.where(self.supra_lake_coverage > 0)[0]:
+                        if not overdeepening_mask[bin_idx]:
+                            continue  # no growth outside the overdeepening
                         rate = 0.0
                         for s_min, s_max, r in self._lake_growth_rules:
                             if s_min <= slopes_deg[bin_idx] < s_max:

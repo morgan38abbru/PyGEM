@@ -48,6 +48,7 @@ import pygem.gcmbiasadj as gcmbiasadj
 import pygem.pygem_modelsetup as modelsetup
 from pygem import class_climate, output
 from pygem.glacierdynamics import MassRedistributionCurveModel
+from pygem.lake_dynamics import LakeFluxBasedModel
 from pygem.massbalance import PyGEMMassBalance
 from pygem.oggm_compat import (
     get_spinup_flowlines,
@@ -704,52 +705,60 @@ def run(list_packed_vars):
                     else:
                         nsims = 1
 
-                    # Calving parameter
-                    if (
-                        glacier_rgi_table['TermType'] not in [1, 5]
-                        or not pygem_prms['setup']['include_frontalablation']
-                    ):
-                        calving_k = None
-                    else:
-                        # Load quality controlled frontal ablation data
-                        fp = f'{pygem_prms["root"]}/{pygem_prms["calib"]["data"]["frontalablation"]["frontalablation_relpath"]}/analysis/{pygem_prms["calib"]["data"]["frontalablation"]["frontalablation_cal_fn"]}'
-                        assert os.path.exists(fp), 'Calibrated calving dataset does not exist'
-                        calving_df = pd.read_csv(fp)
-                        calving_rgiids = list(calving_df.RGIId)
+                    # Calving parameters
+                    is_lake_glacier = False
+                    lake_info = None
 
-                        # Use calibrated value if individual data available
-                        if rgiid in calving_rgiids:
-                            calving_idx = calving_rgiids.index(rgiid)
-                            calving_k = calving_df.loc[calving_idx, 'calving_k']
-                            calving_k_nmad = calving_df.loc[calving_idx, 'calving_k_nmad']
-                        # Otherwise, use region's median value
+                    # Check for calibrated proglacial lake
+                    if pygem_prms['setup'].get('include_laketerm', False):
+                        lake_info = lake.load_lake_calving_data(pygem_prms, rgiid)
+                        if lake_info is not None:
+                            is_lake_glacier = True
+                            calving_k = lake_info['calving_k']
+                            calving_k_values = np.array([calving_k] * nsims)
+                            if debug:
+                                print(f'Lake glacier detected: calving_k={calving_k}, '
+                                    f'water_level={lake_info["water_level"]}')
+
+                    if not is_lake_glacier:
+                        if (
+                            glacier_rgi_table['TermType'] not in [1, 5]
+                            or not pygem_prms['setup']['include_frontalablation']
+                        ):
+                            calving_k = None
+                            calving_k_values = np.array([0.0])
                         else:
-                            calving_df['O1Region'] = [
-                                int(x.split('-')[1].split('.')[0]) for x in calving_df.RGIId.values
-                            ]
-                            calving_df_reg = calving_df.loc[calving_df['O1Region'] == int(reg_str), :]
-                            calving_k = np.median(calving_df_reg.calving_k)
-                            calving_k_nmad = 0
-
-                        if nsims == 1:
-                            calving_k_values = np.array([calving_k])
-                        else:
-                            calving_k_values = calving_k + np.random.normal(loc=0, scale=calving_k_nmad, size=nsims)
-                            calving_k_values[calving_k_values < 0.001] = 0.001
-                            calving_k_values[calving_k_values > 5] = 5
-
-                            #                            calving_k_values[:] = calving_k
-
-                            while not abs(np.median(calving_k_values) - calving_k) < 0.001:
-                                calving_k_values = calving_k + np.random.normal(loc=0, scale=calving_k_nmad, size=nsims)
+                            # Existing tidewater calving_k loading (unchanged from your clean commit)
+                            fp = f'{pygem_prms["root"]}/{pygem_prms["calib"]["data"]["frontalablation"]["frontalablation_relpath"]}/analysis/{pygem_prms["calib"]["data"]["frontalablation"]["frontalablation_cal_fn"]}'
+                            assert os.path.exists(fp), 'Calibrated calving dataset does not exist'
+                            calving_df = pd.read_csv(fp)
+                            calving_rgiids = list(calving_df.RGIId)
+                            if rgiid in calving_rgiids:
+                                calving_idx = calving_rgiids.index(rgiid)
+                                calving_k = calving_df.loc[calving_idx, 'calving_k']
+                                calving_k_nmad = calving_df.loc[calving_idx, 'calving_k_nmad']
+                            else:
+                                calving_df['O1Region'] = [
+                                    int(x.split('-')[1].split('.')[0]) for x in calving_df.RGIId.values
+                                ]
+                                calving_df_reg = calving_df.loc[calving_df['O1Region'] == int(reg_str), :]
+                                calving_k = np.median(calving_df_reg.calving_k)
+                                calving_k_nmad = 0
+                            if nsims == 1:
+                                calving_k_values = np.array([calving_k])
+                            else:
+                                calving_k_values = calving_k + np.random.normal(
+                                    loc=0, scale=calving_k_nmad, size=nsims
+                                )
                                 calving_k_values[calving_k_values < 0.001] = 0.001
                                 calving_k_values[calving_k_values > 5] = 5
-
-                            #                                print(calving_k, np.median(calving_k_values))
-
-                            assert abs(np.median(calving_k_values) - calving_k) < 0.001, (
-                                'calving_k distribution too far off'
-                            )
+                                while not abs(np.median(calving_k_values) - calving_k) < 0.001:
+                                    calving_k_values = calving_k + np.random.normal(
+                                        loc=0, scale=calving_k_nmad, size=nsims
+                                    )
+                                    calving_k_values[calving_k_values < 0.001] = 0.001
+                                    calving_k_values[calving_k_values > 5] = 5
+                                assert abs(np.median(calving_k_values) - calving_k) < 0.001
 
                         if debug:
                             print(
@@ -911,27 +920,21 @@ def run(list_packed_vars):
                                 inversion_filter=inversion_filter,
                             )
 
-                            # Non-tidewater glaciers
-                            if not gdir.is_tidewater or not pygem_prms['setup']['include_frontalablation']:
-                                # Arbitrariliy shift the MB profile up (or down) until mass balance is zero (equilibrium for inversion)
+                            # Lake glaciers and non-tidewater: use land-terminating inversion
+                            if (not gdir.is_tidewater
+                                    or not pygem_prms['setup']['include_frontalablation']
+                                    or is_lake_glacier):
                                 apparent_mb_from_any_mb(gdir, mb_model=mbmod_inv)
                                 tasks.prepare_for_inversion(gdir)
-                                tasks.mass_conservation_inversion(
-                                    gdir,
-                                    glen_a=glen_a,
-                                    fs=fs,
-                                )
-
+                                tasks.mass_conservation_inversion(gdir, glen_a=glen_a, fs=fs)
                             # Tidewater glaciers
                             else:
                                 cfg.PARAMS['use_kcalving_for_inversion'] = True
                                 cfg.PARAMS['use_kcalving_for_run'] = True
                                 tasks.find_inversion_calving_from_any_mb(
-                                    gdir,
-                                    mb_model=mbmod_inv,
-                                    glen_a=glen_a,
-                                    fs=fs,
+                                    gdir, mb_model=mbmod_inv, glen_a=glen_a, fs=fs,
                                 )
+
 
                             # ----- INDENTED TO BE JUST WITH DYNAMICS -----
                             tasks.init_present_time_glacier(gdir)  # adds bins below
@@ -954,11 +957,15 @@ def run(list_packed_vars):
                                 raise
 
                         # Water Level
-                        # Check that water level is within given bounds
-                        cls = gdir.read_pickle('inversion_input')[-1]
-                        th = cls['hgt'][-1]
-                        vmin, vmax = cfg.PARAMS['free_board_marine_terminating']
-                        water_level = utils.clip_scalar(0, th - vmax, th - vmin)
+                        if is_lake_glacier:
+                            water_level = lake_info['water_level']
+                            moraine_elev = lake_info['moraine_elev']
+                        else:
+                            cls = gdir.read_pickle('inversion_input')[-1]
+                            th = cls['hgt'][-1]
+                            vmin, vmax = cfg.PARAMS['free_board_marine_terminating']
+                            water_level = utils.clip_scalar(0, th - vmax, th - vmin)
+                            moraine_elev = None
 
                     # No ice dynamics options
                     else:
@@ -984,8 +991,21 @@ def run(list_packed_vars):
                         if debug:
                             print('OGGM GLACIER DYNAMICS!')
 
-                        # FluxBasedModel is older numerical scheme but includes frontal ablation
-                        if gdir.is_tidewater:
+                        # Lake-terminating: use LakeFluxBasedModel
+                        if is_lake_glacier:
+                            cfg.PARAMS['use_kcalving_for_run'] = True
+                            ev_model = LakeFluxBasedModel(
+                                nfls,
+                                y0=args.sim_startyear,
+                                mb_model=mbmod,
+                                glen_a=glen_a,
+                                fs=fs,
+                                is_tidewater=True,
+                                water_level=water_level,
+                                moraine_elev=moraine_elev,
+                            )
+                        # FluxBasedModel for marine-terminating
+                        elif gdir.is_tidewater:
                             ev_model = FluxBasedModel(
                                 nfls,
                                 y0=args.sim_startyear,
@@ -995,7 +1015,7 @@ def run(list_packed_vars):
                                 is_tidewater=gdir.is_tidewater,
                                 water_level=water_level,
                             )
-                        # SemiImplicitModel is newer numerical solver, but does not yet include frontal ablation
+                        # Land-terminating
                         else:
                             ev_model = SemiImplicitModel(
                                 nfls,
@@ -1016,15 +1036,8 @@ def run(list_packed_vars):
                         ev_model.mb_model.glac_wide_area_annual[-1] = diag.area_m2[-1]
 
                         # Record frontal ablation for tidewater glaciers and update total mass balance
-                        if gdir.is_tidewater:
+                        if gdir.is_tidewater or is_lake_glacier:
                             # Glacier-wide frontal ablation (m3 w.e.)
-                            # - note: diag.calving_m3 is cumulative calving
-                            if debug:
-                                print('\n\ndiag.calving_m3:', diag.calving_m3.values)
-                                print(
-                                    'calving_m3_since_y0:',
-                                    ev_model.calving_m3_since_y0,
-                                )
                             calving_m3_annual = (
                                 (diag.calving_m3.values[1:] - diag.calving_m3.values[0:-1])
                                 * pygem_prms['constants']['density_ice']
@@ -1033,10 +1046,9 @@ def run(list_packed_vars):
                             for n, year in enumerate(np.arange(args.sim_startyear, args.sim_endyear + 1)):
                                 tstart, tstop = ev_model.mb_model.get_step_inds(year)
                                 ev_model.mb_model.glac_wide_frontalablation[tstop] = calving_m3_annual[n]
-
-                            # Glacier-wide total mass balance (m3 w.e.)
                             ev_model.mb_model.glac_wide_massbaltotal = (
-                                ev_model.mb_model.glac_wide_massbaltotal - ev_model.mb_model.glac_wide_frontalablation
+                                ev_model.mb_model.glac_wide_massbaltotal
+                                - ev_model.mb_model.glac_wide_frontalablation
                             )
 
                             if debug:

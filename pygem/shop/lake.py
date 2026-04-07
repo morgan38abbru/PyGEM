@@ -162,3 +162,51 @@ def supra_lake_binned(gdir, fl_str='inversion_flowlines', filesuffix=''):
 
         # Overwrite pickle
         gdir.write_pickle(flowlines, fl_str, filesuffix=filesuffix)
+
+# ============================================================================
+# EXISTING LAKE CALIBRATION DATA LOADER
+# ============================================================================
+
+def load_lake_calving_data(pygem_prms, rgiid):
+    """
+    Check whether an RGI glacier has a calibrated proglacial lake entry.
+
+    Parameters
+    ----------
+    pygem_prms : dict
+        PyGEM configuration dictionary
+    rgiid : str
+        RGI glacier ID string
+
+    Returns
+    -------
+    dict or None
+        If found: {'calving_k': float, 'water_level': float, 'moraine_elev': float or None}
+        Returns None if no lake entry exists or calving_k is NaN.
+    """
+    import pandas as pd
+    import os
+
+    lake_fa_fp = (
+        pygem_prms['root']
+        + pygem_prms['calib']['data']['frontalablation']['frontalablation_relpath']
+        + pygem_prms['calib']['data']['frontalablation']['lake_fa_cal_fn']
+    )
+    if not os.path.exists(lake_fa_fp):
+        return None
+
+    lake_fa_df = pd.read_csv(lake_fa_fp)
+    if rgiid not in list(lake_fa_df['RGIId']):
+        return None
+
+    row = lake_fa_df.loc[lake_fa_df['RGIId'] == rgiid].iloc[0]
+    if pd.isna(row['calving_k']):
+        return None
+
+    moraine_elev = float(row['moraine_elev']) if 'moraine_elev' in row and not pd.isna(row['moraine_elev']) else None
+
+    return {
+        'calving_k': float(row['calving_k']),
+        'water_level': float(row['water_level']),
+        'moraine_elev': moraine_elev,
+    }

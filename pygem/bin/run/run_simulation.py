@@ -1085,6 +1085,7 @@ def run(list_packed_vars):
 
                         # For land-terminating: optionally detect new lake formation
                         else:
+                            lake_formed_dynamically = False
                             lake_formation_info = None
                             if pygem_prms['setup'].get('enable_lake_formation', False):
                                 threshold_depth = pygem_prms['setup'].get(
@@ -1102,6 +1103,10 @@ def run(list_packed_vars):
                             if lake_formation_info is not None:
                                 od_bins = lake_formation_info['overdeepened_bins']
                                 threshold = lake_formation_info['lake_water_level']
+
+                                # Save model state before probing so we can restore it afterward
+                                nfls_saved = copy.deepcopy(ev_model.fls)
+                                t_saved    = ev_model.t
 
                                 # Year-by-year detection loop
                                 for year in range(args.sim_startyear, args.sim_endyear + 1):
@@ -1126,6 +1131,10 @@ def run(list_packed_vars):
                                                 f'seed_bin={seed_bin}'
                                             )
                                         break
+
+                                # Restore model state regardless of whether a lake formed
+                                ev_model.fls = nfls_saved
+                                ev_model.t   = t_saved
 
                             if lake_formed_dynamically:
                                 # Phase 1: clean land-terminating run to lake formation year
@@ -1173,7 +1182,7 @@ def run(list_packed_vars):
                                     args.sim_endyear + 1, fl_diag_path=True
                                 )
 
-                                # Drop duplicate boundary timestep then concat
+                                # Drop duplicate boundary timestep then 
                                 diag_lake = diag_lake.isel(time=slice(1, None))
                                 ds_lake = [ds_lake[0].isel(time=slice(1, None))]
                                 diag = xr.concat([diag_land, diag_lake], dim='time')
@@ -1438,14 +1447,26 @@ def run(list_packed_vars):
                         output_offglac_runoff_steps[:, n_iter] = mbmod.offglac_wide_runoff
                         output_glac_supra_lake_storage_steps[:, n_iter] = mbmod.glac_wide_supra_lake_storage
 
-                        # binned ouputs
                         if args.option_dynamics == 'OGGM':
                             # grab binned outputs from oggm flowline diagnostics
                             # note, transpose restructures (time, dis_along_flowline) -> (dis_along_flowline, time)
-                            output_glac_bin_area_annual_sim = ds[0].area_m2.values.T[:, :, np.newaxis]
-                            output_glac_bin_icethickness_annual_sim = ds[0].thickness_m.values.T[:, :, np.newaxis]
+                            n_year_vals = year_values.shape[0]
+                            _area_raw    = ds[0].area_m2.values.T       # shape (nbins, ntimes)
+                            _thick_raw   = ds[0].thickness_m.values.T
+                            _vol_raw     = ds[0].volume_m3.values.T
+
+                            # Trim or pad time axis to match year_values length
+                            def _match_years(arr, n):
+                                if arr.shape[1] >= n:
+                                    return arr[:, :n]
+                                else:
+                                    pad = np.zeros((arr.shape[0], n - arr.shape[1]))
+                                    return np.concatenate([arr, pad], axis=1)
+
+                            output_glac_bin_area_annual_sim = _match_years(_area_raw, n_year_vals)[:, :, np.newaxis]
+                            output_glac_bin_icethickness_annual_sim = _match_years(_thick_raw, n_year_vals)[:, :, np.newaxis]
                             output_glac_bin_mass_annual_sim = (
-                                ds[0].volume_m3.values.T[:, :, np.newaxis] * pygem_prms['constants']['density_ice']
+                                _match_years(_vol_raw, n_year_vals)[:, :, np.newaxis] * pygem_prms['constants']['density_ice']
                             )
                         else:
                             output_glac_bin_area_annual_sim = mbmod.glac_bin_area_annual[:, :, np.newaxis]

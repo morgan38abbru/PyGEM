@@ -545,6 +545,30 @@ class glacierwide_stats(single_glacier):
                 'temporal_resolution': self.timestep,
                 'comment': 'transient snowline is altitude separating snow from ice/firn',
             }
+            self.output_coords_dict['glac_proglacial_lake_area_annual'] = collections.OrderedDict(
+                [('glac', self.glac_values), ('year', self.year_values)]
+            )
+            self.output_attrs_dict['glac_proglacial_lake_area_annual'] = {
+                'long_name': 'proglacial lake area',
+                'units': 'm2',
+                'temporal_resolution': 'annual',
+                'comment': (
+                    'estimated proglacial lake area from cumulative terminus retreat; '
+                    'sum of glacier_area_initial for bins that have lost all ice'
+                ),
+            }
+            self.output_coords_dict['glac_proglacial_lake_volume_annual'] = collections.OrderedDict(
+                [('glac', self.glac_values), ('year', self.year_values)]
+            )
+            self.output_attrs_dict['glac_proglacial_lake_volume_annual'] = {
+                'long_name': 'proglacial lake volume',
+                'units': 'm3',
+                'temporal_resolution': 'annual',
+                'comment': (
+                    'estimated proglacial lake volume; lake_area * depth where '
+                    'depth = 0.621 * lake_area^0.36 (empirical area-depth scaling)'
+                ),
+            }
             self.output_coords_dict['glac_mass_change_ignored_annual'] = collections.OrderedDict(
                 [('glac', self.glac_values), ('year', self.year_values)]
             )

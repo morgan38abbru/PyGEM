@@ -91,9 +91,17 @@ class PyGEMMassBalance(MassBalanceModel):
         self.modelprms = modelprms
         self.glacier_rgi_table = glacier_rgi_table
         self.is_tidewater = gdir.is_tidewater
+        self.water_level = getattr(gdir, 'proglacial_water_level', None)
+        self.moraine_elev = getattr(gdir, 'proglacial_moraine_elev', None)
         self.icethickness_initial = getattr(fls[fl_id], 'thick', None)
         self.width_initial = fls[fl_id].widths_m
         self.glacier_area_initial = fls[fl_id].widths_m * fls[fl_id].dx_meter
+        self.glacier_area_at_lake_formation = None
+        self.overdeepening_mask = None
+        self.lake_od_bin_indices = None
+        self.lake_od_bin_areas = None
+        self.lake_od_bin_bed_h = None
+        self.lake_water_level = None
         self.heights = fls[fl_id].surface_h
         if pygem_prms['mb']['include_debris'] and not ignore_debris and not gdir.is_tidewater:
             try:
@@ -187,6 +195,8 @@ class PyGEMMassBalance(MassBalanceModel):
         self.glac_wide_ELA_annual = np.zeros(self.nyears + 1)
         self.glac_wide_supra_lake_storage = np.zeros(self.nsteps)
         self.glac_bin_supra_lake_annual = np.zeros((nbins, self.nyears + 1))
+        self.glac_wide_proglacial_lake_area_annual = np.zeros(self.nyears + 1)
+        self.glac_wide_proglacial_lake_volume_annual = np.zeros(self.nyears + 1)
         self.offglac_wide_prec = np.zeros(self.nsteps)
         self.offglac_wide_refreeze = np.zeros(self.nsteps)
         self.offglac_wide_melt = np.zeros(self.nsteps)
@@ -886,6 +896,7 @@ class PyGEMMassBalance(MassBalanceModel):
             mb_min = np.min(mb[glac_idx_t0])
             height_max = np.max(heights[glac_idx_t0])
             mb_filled[(mb_filled == 0) & (heights < height_max)] = mb_min
+            
 
         return mb_filled
 
@@ -1022,6 +1033,36 @@ class PyGEMMassBalance(MassBalanceModel):
                 lake_storage = (extra_frac[:, np.newaxis] * bin_melt_period).sum(0)
                 self.glac_wide_supra_lake_storage[t_start : t_stop + 1] = lake_storage
                 self.glac_wide_runoff[t_start : t_stop + 1] -= lake_storage
+
+            # Proglacial lake area and volume
+            # Only computed when water_level and moraine_elev are set on the gdir
+            # (i.e. for lake-terminating glaciers)
+            # Area: sum of bin areas where ice has been lost AND bed is below water level
+            #        (these are the bins now inundated by the lake)
+            # Volume: sum of bin_area * (water_level - bed_h) for those same bins,
+            #         clamped so depth is never negative
+            if self.lake_od_bin_indices is not None and len(self.lake_od_bin_indices) > 0:
+                # Get current glacier area at the tracked OD bin indices
+                # These indices refer to the model flowline coordinate system
+                ga_now_at_od = np.array([
+                    glacier_area[b] if b < len(glacier_area) else 0.0
+                    for b in self.lake_od_bin_indices
+                ])
+                # A bin contributes lake area when it was ice-covered at lake
+                # formation (stored in lake_od_bin_areas) and is now ice-free
+                calved_mask = (self.lake_od_bin_areas > 0) & (ga_now_at_od == 0)
+                if calved_mask.any():
+                    lake_area = self.lake_od_bin_areas[calved_mask].sum()
+                    depth_per_bin = np.maximum(
+                        self.lake_water_level - self.lake_od_bin_bed_h[calved_mask], 0
+                    )
+                    lake_volume = (self.lake_od_bin_areas[calved_mask] * depth_per_bin).sum()
+                else:
+                    lake_area = 0.0
+                    lake_volume = 0.0
+                self.glac_wide_proglacial_lake_area_annual[year_idx] = lake_area
+                self.glac_wide_proglacial_lake_volume_annual[year_idx] = lake_volume
+
 
             # Snow line altitude (m a.s.l.)
             heights_steps = heights[:, np.newaxis].repeat((t_stop + 1) - t_start, axis=1)

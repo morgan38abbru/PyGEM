@@ -1018,6 +1018,17 @@ def run(list_packed_vars):
                                 water_level=water_level,
                                 moraine_elev=moraine_elev,
                             )
+                            diag, ds = ev_model.run_until_and_store(
+                                args.sim_endyear + 1, fl_diag_path=True
+                            )
+                            ev_model.mb_model.glac_wide_volume_annual[-1] = diag.volume_m3.values[-1]
+                            ev_model.mb_model.glac_wide_area_annual[-1] = diag.area_m2.values[-1]
+                            ev_model.mb_model.glac_wide_proglacial_lake_area_annual[-1] = (
+                                ev_model.mb_model.glac_wide_proglacial_lake_area_annual[-2]
+                            )
+                            ev_model.mb_model.glac_wide_proglacial_lake_volume_annual[-1] = (
+                                ev_model.mb_model.glac_wide_proglacial_lake_volume_annual[-2]
+                            )
                         # FluxBasedModel for marine-terminating
                         elif gdir.is_tidewater:
                             ev_model = FluxBasedModel(
@@ -1029,6 +1040,11 @@ def run(list_packed_vars):
                                 is_tidewater=gdir.is_tidewater,
                                 water_level=water_level,
                             )
+                            diag, ds = ev_model.run_until_and_store(
+                                args.sim_endyear + 1, fl_diag_path=True
+                            )
+                            ev_model.mb_model.glac_wide_volume_annual[-1] = diag.volume_m3.values[-1]
+                            ev_model.mb_model.glac_wide_area_annual[-1] = diag.area_m2.values[-1]
                         # Land-terminating
                         # Land-terminating: optionally detect new lake formation
                         else:

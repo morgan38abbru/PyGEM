@@ -988,7 +988,7 @@ def run(list_packed_vars):
                     else:
                         gdir.proglacial_water_level = None
                         gdir.proglacial_moraine_elev = None
-                    print(f'DEBUG: is_lake_glacier={is_lake_glacier}, water_level={getattr(gdir, "proglacial_water_level", "NOT SET")}')
+                    
                     # Mass balance model
                     mbmod = PyGEMMassBalance(
                         gdir,
@@ -1018,6 +1018,50 @@ def run(list_packed_vars):
                                 water_level=water_level,
                                 moraine_elev=moraine_elev,
                             )
+                            # Build OD bin tracking for existing lakes using the
+                            # initial model flowline — same logic as new lake formation
+                            _fl_init = nfls[0]
+                            _ga_init = (_fl_init.widths_m * _fl_init.dx_meter).copy()
+                            _bed_init = _fl_init.bed_h.copy()
+                            _wl = water_level
+                            # Moraine elev: use provided value or detect from flowline
+                            if moraine_elev is not None:
+                                _moraine = moraine_elev
+                            else:
+                                _terminus_bins = np.where(_fl_init.thick > 1.0)[0]
+                                if len(_terminus_bins) > 0:
+                                    _t = int(_terminus_bins[-1])
+                                    _moraine = max(
+                                        _bed_init[_t],
+                                        _bed_init[_t + 1] if _t + 1 < len(_bed_init) else _bed_init[_t]
+                                    )
+                                else:
+                                    _moraine = _wl + 20.0
+                            # Walk upstream from terminus to find overdeepened bins
+                            _terminus_bins = np.where(_fl_init.thick > 1.0)[0]
+                            if len(_terminus_bins) > 0:
+                                _t = int(_terminus_bins[-1])
+                                _od_bins = []
+                                for _i in range(_t, -1, -1):
+                                    if _bed_init[_i] < _moraine:
+                                        _od_bins.append(_i)
+                                    else:
+                                        break
+                                _od_bins = np.array(_od_bins, dtype=int)
+                            else:
+                                _od_bins = np.array([], dtype=int)
+                            # Keep only bins with bed below water level and actual ice
+                            _valid_od_bins = np.array([
+                                b for b in _od_bins
+                                if b < len(_bed_init)
+                                and _bed_init[b] < _wl
+                                and _ga_init[b] > 0
+                            ], dtype=int)
+                            mbmod.lake_od_bin_indices = _valid_od_bins
+                            mbmod.lake_od_bin_areas = _ga_init[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
+                            mbmod.lake_od_bin_bed_h = _bed_init[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
+                            mbmod.lake_water_level = _wl
+
                             diag, ds = ev_model.run_until_and_store(
                                 args.sim_endyear + 1, fl_diag_path=True
                             )

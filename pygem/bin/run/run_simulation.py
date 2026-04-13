@@ -1057,11 +1057,17 @@ def run(list_packed_vars):
                                 and _bed_init[b] < _wl
                                 and _ga_init[b] > 0
                             ], dtype=int)
+                            lam = cfg.PARAMS['trapezoid_lambdas']
+                            _w0_all = np.maximum(
+                                _fl_init.widths_m - 2.0 * lam * _fl_init.thick, 0.0
+                            )
                             mbmod.lake_od_bin_indices = _valid_od_bins
-                            mbmod.lake_od_bin_areas = _ga_init[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
-                            mbmod.lake_od_bin_bed_h = _bed_init[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
-                            mbmod.lake_water_level = _wl
+                            mbmod.lake_od_bin_areas   = _ga_init[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
+                            mbmod.lake_od_bin_bed_h   = _bed_init[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
+                            mbmod.lake_od_bin_w0      = _w0_all[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
+                            mbmod.lake_water_level    = _wl
 
+                            mbmod._dynamics_model = ev_model
                             diag, ds = ev_model.run_until_and_store(
                                 args.sim_endyear + 1, fl_diag_path=True
                             )
@@ -1073,6 +1079,9 @@ def run(list_packed_vars):
                             ev_model.mb_model.glac_wide_proglacial_lake_volume_annual[-1] = (
                                 ev_model.mb_model.glac_wide_proglacial_lake_volume_annual[-2]
                             )
+                            ev_model.mb_model._lake_area_from_dynamics = ev_model._lake_area_continuous
+                            ev_model.mb_model._lake_volume_from_dynamics = ev_model._lake_volume_continuous
+                           
                         # FluxBasedModel for marine-terminating
                         elif gdir.is_tidewater:
                             ev_model = FluxBasedModel(
@@ -1197,10 +1206,15 @@ def run(list_packed_vars):
                                         and _bed[b] < _wl
                                         and _ga_at_formation[b] > 0
                                     ], dtype=int)
+                                    lam = cfg.PARAMS['trapezoid_lambdas']
+                                    _w0_formation = np.maximum(
+                                        _fl_at_formation.widths_m - 2.0 * lam * _fl_at_formation.thick, 0.0
+                                    )
                                     mbmod.lake_od_bin_indices = _valid_od_bins
-                                    mbmod.lake_od_bin_areas = _ga_at_formation[_valid_od_bins].copy()
-                                    mbmod.lake_od_bin_bed_h = _bed[_valid_od_bins].copy()
-                                    mbmod.lake_water_level = _wl
+                                    mbmod.lake_od_bin_areas   = _ga_at_formation[_valid_od_bins].copy()
+                                    mbmod.lake_od_bin_bed_h   = _bed[_valid_od_bins].copy()
+                                    mbmod.lake_od_bin_w0      = _w0_formation[_valid_od_bins].copy()
+                                    mbmod.lake_water_level    = _wl
                                     # Keep these for backward compat but they are no longer used
                                     mbmod.glacier_area_at_lake_formation = _ga_at_formation
                                     mbmod.overdeepening_mask = None
@@ -1216,6 +1230,7 @@ def run(list_packed_vars):
                                         moraine_elev=lake_formation_info['moraine_elevation'],
                                         initial_seed_bin=seed_bin,           # <-- add this
 )
+                                    mbmod._dynamics_model = ev_model_lake
                                     diag_lake, ds_lake = ev_model_lake.run_until_and_store(
                                         args.sim_endyear + 1, fl_diag_path=True
                                     )
@@ -1226,9 +1241,12 @@ def run(list_packed_vars):
                                     diag = xr.concat([diag_land, diag_lake], dim='time')
                                     ds = [xr.concat([ds_land[0], ds_lake_fl], dim='time')]
                                     ev_model = ev_model_lake
+                                    mbmod._dynamics_model = ev_model_lake
                                     ev_model.mb_model.glac_wide_volume_annual[-1] = diag.volume_m3.values[-1]
                                     ev_model.mb_model.glac_wide_area_annual[-1] = diag.area_m2.values[-1]
-
+                                    ev_model.mb_model._lake_area_from_dynamics = ev_model._lake_area_continuous
+                                    ev_model.mb_model._lake_volume_from_dynamics = ev_model._lake_volume_continuous
+                                  
 
                             if not lake_formed:
                                 # Normal land-terminating run

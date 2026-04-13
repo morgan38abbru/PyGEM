@@ -32,25 +32,33 @@ class LakeFluxBasedModel(FluxBasedModel):
     surface_h > water_level and thick > 0 and bed_h < water_level).
     If no such bin exists (fully submerged tongue), the last ice bin is used.
 
-    If the computed water depth d <= 0 (terminus bed is above water level),
-    a fallback water level of moraine_elev - 20 m is used until a bin with
-    bed_h < water_level is reached.
+    If moraine_elev is provided and the terminus bed is above the prescribed
+    water_level, the water level is permanently set to moraine_elev - 20 m.
 
     Parameters
     ----------
     flowlines : list of oggm.Flowline
     moraine_elev : float
-        Elevation of the terminal moraine [m a.s.l.], used for fallback
-        water level when terminus bed is above the prescribed water_level.
+        Elevation of the terminal moraine [m a.s.l.], used to override
+        water_level when the terminus bed is above it.
     **kwargs : passed to FluxBasedModel (must include water_level)
     """
 
     def __init__(self, flowlines, moraine_elev=None, **kwargs):
         super().__init__(flowlines, **kwargs)
         self.moraine_elev = moraine_elev
-        self._fallback_water_level = (
-            moraine_elev - 20.0 if moraine_elev is not None else None
-        )
+
+        # If the terminus bed is above water_level, permanently use moraine - 20 m
+        if moraine_elev is not None:
+            fl = flowlines[0]
+            ice_bins = np.where(fl.thick > 0)[0]
+            if len(ice_bins) > 0:
+                terminus_bed = fl.bed_h[int(ice_bins[-1])]
+                if terminus_bed >= self.water_level:
+                    self.water_level = moraine_elev - 20.0
+
+        self._lake_area_continuous = 0.0    # running proglacial lake area [m^2]
+        self._lake_volume_continuous = 0.0  # running proglacial lake volume [m^3]
 
     def step(self, dt):
         """Advance one timestep with lake-aware calving."""
@@ -81,11 +89,7 @@ class LakeFluxBasedModel(FluxBasedModel):
                 h = fl.thick[calving_front_idx]
                 d = h - (fl.surface_h[calving_front_idx] - self.water_level)
                 if d <= 0 or h <= 0:
-                    # Terminus bed is above water_level; use fallback
-                    d, calving_front_idx = self._get_fallback_depth(fl)
-                    if d is None:
-                        continue
-                    h = fl.thick[calving_front_idx]
+                    continue
             else:
                 # Entire tongue submerged — use last ice bin
                 ice_bins = np.where(
@@ -125,6 +129,11 @@ class LakeFluxBasedModel(FluxBasedModel):
 
             while fl.calving_bucket_m3 >= vol_terminus and current >= 0:
                 fl.calving_bucket_m3 -= vol_terminus
+                # Full bin removed: credit its entire area and volume
+                bin_area = float(fl.widths_m[current] * fl.dx_meter)
+                bin_depth = max(self.water_level - fl.bed_h[current], 0.0)
+                self._lake_area_continuous += bin_area
+                self._lake_volume_continuous += bin_area * bin_depth
                 section[current] = 0
                 current -= 1
                 # Skip already-empty bins
@@ -136,37 +145,18 @@ class LakeFluxBasedModel(FluxBasedModel):
                 if vol_terminus <= 0:
                     break
 
+            # Fractional credit for partial fill of the current front bin
+            if current >= 0 and vol_terminus > 0:
+                frac = min(fl.calving_bucket_m3 / vol_terminus, 1.0)
+                bin_area = float(fl.widths_m[current] * fl.dx_meter)
+                bin_depth = max(self.water_level - fl.bed_h[current], 0.0)
+                self._lake_area_continuous += frac * bin_area
+                self._lake_volume_continuous += frac * bin_area * bin_depth
+
             fl.section = section
 
         return dt_actual
 
-    def _get_fallback_depth(self, fl):
-        """
-        When the terminus bed is above water_level, use moraine_elev - 20 m
-        as a temporary water level to compute calving depth.
-
-        Returns (d, bin_idx) or (None, None) if no suitable bin found.
-        """
-        if self._fallback_water_level is None:
-            return None, None
-        candidates = np.nonzero(
-            (fl.surface_h > self._fallback_water_level)
-            & (fl.thick > 0)
-            & (fl.bed_h < self._fallback_water_level)
-        )[0]
-        if len(candidates) == 0:
-            # Try last ice bin
-            ice_bins = np.where(fl.thick > 0)[0]
-            if len(ice_bins) == 0:
-                return None, None
-            idx = int(ice_bins[-1])
-            h = fl.thick[idx]
-            d = h - (fl.surface_h[idx] - self._fallback_water_level)
-            return (d if d > 0 else None), idx
-        idx = int(candidates[-1])
-        h = fl.thick[idx]
-        d = h - (fl.surface_h[idx] - self._fallback_water_level)
-        return (d if d > 0 else None), idx
     
 class NewLakeFluxBasedModel(LakeFluxBasedModel):
     """
@@ -190,7 +180,8 @@ class NewLakeFluxBasedModel(LakeFluxBasedModel):
     initial_seed_bin : int
         Index of the bin that triggered lake formation
     moraine_elev : float
-        Moraine elevation used for fallback water depth [m a.s.l.]
+        Moraine elevation used to set water_level if terminus bed is above
+        the prescribed water_level [m a.s.l.]
     **kwargs : passed to LakeFluxBasedModel (must include water_level)
     """
 
@@ -360,6 +351,11 @@ class NewLakeFluxBasedModel(LakeFluxBasedModel):
                         self._seq_idx += 1
                         self._set_next_target(fl)
 
+                    # Full bin removed: credit area and volume
+                    bin_area = float(fl.widths_m[current] * fl.dx_meter)
+                    bin_depth = max(self.water_level - fl.bed_h[current], 0.0)
+                    self._lake_area_continuous += bin_area
+                    self._lake_volume_continuous += bin_area * bin_depth
                     section[current] = 0
                     current -= 1
 
@@ -370,6 +366,14 @@ class NewLakeFluxBasedModel(LakeFluxBasedModel):
                     vol_terminus = section[current] * fl.dx_meter
                     if vol_terminus <= 0:
                         break
+
+                # Fractional credit for partial fill of the current front bin
+                if current >= 0 and vol_terminus > 0:
+                    frac = min(fl.calving_bucket_m3 / vol_terminus, 1.0)
+                    bin_area = float(fl.widths_m[current] * fl.dx_meter)
+                    bin_depth = max(self.water_level - fl.bed_h[current], 0.0)
+                    self._lake_area_continuous += frac * bin_area
+                    self._lake_volume_continuous += frac * bin_area * bin_depth
 
             else:
                 # Standard phase: same sequential calving as LakeFluxBasedModel
@@ -384,6 +388,11 @@ class NewLakeFluxBasedModel(LakeFluxBasedModel):
 
                 while fl.calving_bucket_m3 >= vol_terminus and current >= 0:
                     fl.calving_bucket_m3 -= vol_terminus
+                    # Full bin removed: credit area and volume
+                    bin_area = float(fl.widths_m[current] * fl.dx_meter)
+                    bin_depth = max(self.water_level - fl.bed_h[current], 0.0)
+                    self._lake_area_continuous += bin_area
+                    self._lake_volume_continuous += bin_area * bin_depth
                     section[current] = 0
                     current -= 1
                     while current >= 0 and section[current] * fl.dx_meter <= 0:
@@ -393,6 +402,14 @@ class NewLakeFluxBasedModel(LakeFluxBasedModel):
                     vol_terminus = section[current] * fl.dx_meter
                     if vol_terminus <= 0:
                         break
+
+                # Fractional credit for partial fill of the current front bin
+                if current >= 0 and vol_terminus > 0:
+                    frac = min(fl.calving_bucket_m3 / vol_terminus, 1.0)
+                    bin_area = float(fl.widths_m[current] * fl.dx_meter)
+                    bin_depth = max(self.water_level - fl.bed_h[current], 0.0)
+                    self._lake_area_continuous += frac * bin_area
+                    self._lake_volume_continuous += frac * bin_area * bin_depth
 
             fl.section = section
 

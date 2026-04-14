@@ -881,7 +881,23 @@ class binned_stats(single_glacier):
                 'recorded at the start of each model year, before the annual growth step'
             ),
         }
-
+        self.output_coords_dict['bin_proglacial_water_level_annual'] = collections.OrderedDict(
+            [
+                ('glac', self.glac_values),
+                ('bin', self.bin_values),
+                ('year', self.year_values),
+            ]
+        )
+        self.output_attrs_dict['bin_proglacial_water_level_annual'] = {
+            'long_name': 'binned proglacial lake water level',
+            'units': 'm above sea level',
+            'temporal_resolution': 'annual',
+            'comment': (
+                'water surface elevation of the proglacial lake for bins that have lost all ice '
+                'and become open water; 0 for bins that still contain glacier ice'
+            ),
+        }
+        
         # optionally store binned mass balance components
         if self.binned_components:
             self.output_coords_dict['bin_accumulation'] = collections.OrderedDict(

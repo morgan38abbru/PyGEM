@@ -865,7 +865,7 @@ def run(list_packed_vars):
                 output_offglac_runoff_steps = np.zeros((dates_table.shape[0], nsims)) * np.nan
                 output_glac_bin_icethickness_annual = None
                 output_glac_bin_supra_lake_annual = None
-
+                output_glac_bin_proglacial_water_level_annual = None
 
                 # Loop through model parameters
                 count_exceed_boundary_errors = 0
@@ -1561,6 +1561,10 @@ def run(list_packed_vars):
                             output_glac_bin_melt_steps = output_glac_bin_melt_steps_sim[:, :, np.newaxis]
                             # supra
                             output_glac_bin_supra_lake_annual = (mbmod.glac_bin_supra_lake_annual[:, :, np.newaxis])
+                            # proglacial water level
+                            output_glac_bin_proglacial_water_level_annual = (
+                                mbmod.glac_bin_proglacial_water_level_annual[:, :, np.newaxis]
+                            )
 
                         else:
                             output_glac_bin_area_annual = np.append(
@@ -1620,6 +1624,12 @@ def run(list_packed_vars):
                             output_glac_bin_supra_lake_annual = np.append(
                                 output_glac_bin_supra_lake_annual,
                                 mbmod.glac_bin_supra_lake_annual[:, :, np.newaxis],
+                                axis=2,
+                            )
+                            # proglacial water level
+                            output_glac_bin_proglacial_water_level_annual = np.append(
+                                output_glac_bin_proglacial_water_level_annual,
+                                mbmod.glac_bin_proglacial_water_level_annual[:, :, np.newaxis],
                                 axis=2,
                             )
 
@@ -1892,6 +1902,9 @@ def run(list_packed_vars):
                                 output_ds_binned_stats['bin_supra_lake_annual'].values[0, :, :] = (
                                     output_glac_bin_supra_lake_annual[:, :, n_iter]
                                 )
+                                output_ds_binned_stats['bin_proglacial_water_level_annual'].values[0, :, :] = (
+                                    output_glac_bin_proglacial_water_level_annual[:, :, n_iter]
+                                )
                                 if args.export_binned_components:
                                     output_ds_binned_stats['bin_accumulation'].values[0, :, :] = (
                                         output_glac_bin_acc_steps[:, :, n_iter]
@@ -1953,6 +1966,9 @@ def run(list_packed_vars):
                         )[np.newaxis, :, :]
                         output_ds_binned_stats['bin_supra_lake_annual'].values = np.median(
                             output_glac_bin_supra_lake_annual, axis=2
+                        )[np.newaxis, :, :]
+                        output_ds_binned_stats['bin_proglacial_water_level_annual'].values = np.median(
+                            output_glac_bin_proglacial_water_level_annual, axis=2
                         )[np.newaxis, :, :]
                         if args.export_binned_components:
                             output_ds_binned_stats['bin_accumulation'].values = np.median(

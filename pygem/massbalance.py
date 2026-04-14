@@ -196,6 +196,7 @@ class PyGEMMassBalance(MassBalanceModel):
         self.glac_wide_volume_change_ignored_annual = np.zeros(self.nyears)
         self.glac_wide_ELA_annual = np.zeros(self.nyears + 1)
         self.glac_bin_supra_lake_annual = np.zeros((nbins, self.nyears + 1))
+        self.glac_bin_proglacial_water_level_annual = np.zeros((nbins, self.nyears + 1))
         self.glac_wide_proglacial_lake_area_annual = np.zeros(self.nyears + 1)
         self.glac_wide_proglacial_lake_volume_annual = np.zeros(self.nyears + 1)
         self.offglac_wide_prec = np.zeros(self.nsteps)
@@ -1043,6 +1044,15 @@ class PyGEMMassBalance(MassBalanceModel):
                 self.glac_wide_proglacial_lake_volume_annual[year_idx] = (
                     _dyn._lake_volume_continuous if _dyn is not None else 0.0
                 )
+                # Binned proglacial water level: non-zero only for bins that have become open lake
+                # A bin is "open lake" when it has no ice (thickness == 0) and its bed is
+                # within the overdeepened zone (lake_od_bin_indices).
+                _wl = self.lake_water_level  # scalar m a.s.l., set in run_simulation
+                if _wl is not None:
+                    fl = fls[fl_id]
+                    for b in self.lake_od_bin_indices:
+                        if fl.thick[b] == 0.0:
+                            self.glac_bin_proglacial_water_level_annual[b, year_idx] = _wl
 
             # Snow line altitude (m a.s.l.)
             heights_steps = heights[:, np.newaxis].repeat((t_stop + 1) - t_start, axis=1)

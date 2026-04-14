@@ -48,7 +48,7 @@ import pygem.gcmbiasadj as gcmbiasadj
 import pygem.pygem_modelsetup as modelsetup
 from pygem import class_climate, output
 from pygem.glacierdynamics import MassRedistributionCurveModel
-from pygem.lake_dynamics import LakeFluxBasedModel, NewLakeFluxBasedModel
+from pygem.lake_dynamics import LakeSemiImplicitModel, NewLakeSemiImplicitModel
 from pygem.massbalance import PyGEMMassBalance
 from pygem.oggm_compat import (
     get_spinup_flowlines,
@@ -864,7 +864,6 @@ def run(list_packed_vars):
                 output_offglac_snowpack_steps = np.zeros((dates_table.shape[0], nsims)) * np.nan
                 output_offglac_runoff_steps = np.zeros((dates_table.shape[0], nsims)) * np.nan
                 output_glac_bin_icethickness_annual = None
-                output_glac_supra_lake_storage_steps = np.zeros((dates_table.shape[0], nsims)) * np.nan
                 output_glac_bin_supra_lake_annual = None
 
 
@@ -1005,10 +1004,10 @@ def run(list_packed_vars):
                         if debug:
                             print('OGGM GLACIER DYNAMICS!')
 
-                        # Lake-terminating: use LakeFluxBasedModel
+                        # Lake-terminating: use LakeSemiImplicitModel
                         if is_lake_glacier:
                             cfg.PARAMS['use_kcalving_for_run'] = True
-                            ev_model = LakeFluxBasedModel(
+                            ev_model = LakeSemiImplicitModel(
                                 nfls,
                                 y0=args.sim_startyear,
                                 mb_model=mbmod,
@@ -1084,7 +1083,7 @@ def run(list_packed_vars):
                            
                         # FluxBasedModel for marine-terminating
                         elif gdir.is_tidewater:
-                            ev_model = FluxBasedModel(
+                            ev_model = SemiImplicitModel(
                                 nfls,
                                 y0=args.sim_startyear,
                                 mb_model=mbmod,
@@ -1092,6 +1091,7 @@ def run(list_packed_vars):
                                 fs=fs,
                                 is_tidewater=gdir.is_tidewater,
                                 water_level=water_level,
+                                do_calving=True,
                             )
                             diag, ds = ev_model.run_until_and_store(
                                 args.sim_endyear + 1, fl_diag_path=True
@@ -1126,14 +1126,13 @@ def run(list_packed_vars):
 
                                 # --- Detection pass: year-by-year probe ---
                                 # Use FluxBasedModel so diagnostics are xr-concat compatible
-                                ev_model_probe = FluxBasedModel(
+                                ev_model_probe = SemiImplicitModel(
                                     copy.deepcopy(nfls),
                                     y0=args.sim_startyear,
                                     mb_model=mbmod,
                                     glen_a=glen_a,
                                     fs=fs,
-                                    is_tidewater=False,
-                                    water_level=None,
+                                    water_level=0.0,
                                 )
                                 year_of_formation = None
                                 seed_bin = None
@@ -1161,14 +1160,13 @@ def run(list_packed_vars):
                                     # for glacier_area_at_lake_formation reflects ice coverage
                                     # before any retreat in the formation year itself
                                     lake_start_year = max(year_of_formation - 1, args.sim_startyear)
-                                    ev_model_land = FluxBasedModel(
+                                    ev_model_land = SemiImplicitModel(
                                         nfls,
                                         y0=args.sim_startyear,
                                         mb_model=mbmod,
                                         glen_a=glen_a,
                                         fs=fs,
-                                        is_tidewater=False,
-                                        water_level=None,
+                                        water_level=0.0,
                                     )
                                     diag_land, ds_land = ev_model_land.run_until_and_store(
                                         lake_start_year, fl_diag_path=True
@@ -1219,7 +1217,7 @@ def run(list_packed_vars):
                                     mbmod.glacier_area_at_lake_formation = _ga_at_formation
                                     mbmod.overdeepening_mask = None
 
-                                    ev_model_lake = NewLakeFluxBasedModel(
+                                    ev_model_lake = NewLakeSemiImplicitModel(
                                         copy.deepcopy(ev_model_land.fls),
                                         y0=lake_start_year,
                                         mb_model=mbmod,
@@ -1495,7 +1493,6 @@ def run(list_packed_vars):
                         output_offglac_melt_steps[:, n_iter] = mbmod.offglac_wide_melt
                         output_offglac_snowpack_steps[:, n_iter] = mbmod.offglac_wide_snowpack
                         output_offglac_runoff_steps[:, n_iter] = mbmod.offglac_wide_runoff
-                        output_glac_supra_lake_storage_steps[:, n_iter] = mbmod.glac_wide_supra_lake_storage
 
                         # binned ouputs
                         if args.option_dynamics == 'OGGM':
@@ -1698,9 +1695,6 @@ def run(list_packed_vars):
                                 output_ds_all_stats['offglac_snowpack'].values[0, :] = output_offglac_snowpack_steps[
                                     :, n_iter
                                 ]
-                                output_ds_all_stats['glac_supra_lake_storage'].values[0, :] = (
-                                    output_glac_supra_lake_storage_steps[:, n_iter]
-                                )
 
                             # export glacierwide stats for iteration
                             output_stats.set_fn(base_fn.replace('SETS', f'set{n_iter}') + args.outputfn_sfix + 'all.nc')
@@ -1758,7 +1752,6 @@ def run(list_packed_vars):
                         output_offglac_melt_steps_stats = calc_stats_array(output_offglac_melt_steps)
                         output_offglac_refreeze_steps_stats = calc_stats_array(output_offglac_refreeze_steps)
                         output_offglac_snowpack_steps_stats = calc_stats_array(output_offglac_snowpack_steps)
-                        output_glac_supra_lake_storage_stats = calc_stats_array(output_glac_supra_lake_storage_steps)
 
                     # output mean/median from all simulations
                     output_ds_all_stats['glac_runoff'].values[0, :] = output_glac_runoff_steps_stats[:, 0]
@@ -1793,9 +1786,6 @@ def run(list_packed_vars):
                         output_ds_all_stats['offglac_melt'].values[0, :] = output_offglac_melt_steps_stats[:, 0]
                         output_ds_all_stats['offglac_refreeze'].values[0, :] = output_offglac_refreeze_steps_stats[:, 0]
                         output_ds_all_stats['offglac_snowpack'].values[0, :] = output_offglac_snowpack_steps_stats[:, 0]
-                        output_ds_all_stats['glac_supra_lake_storage'].values[0, :] = (
-                            output_glac_supra_lake_storage_stats[:, 0]
-                        )
 
                     # output median absolute deviation
                     if nsims > 1:

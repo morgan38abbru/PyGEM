@@ -613,19 +613,6 @@ class glacierwide_stats(single_glacier):
                 'temporal_resolution': self.timestep,
                 'comment': 'snow remaining accounting for new accumulation, melt, and refreeze',
             }
-            self.output_coords_dict['glac_supra_lake_storage'] = collections.OrderedDict(
-                [('glac', self.glac_values), ('time', self.time_values)]
-            )
-            self.output_attrs_dict['glac_supra_lake_storage'] = {
-                'long_name': 'glacier-wide supraglacial lake storage, in water equivalent',
-                'units': 'm3',
-                'temporal_resolution': self.timestep,
-                'comment': (
-                    'melt water diverted into supraglacial lake storage rather than exported as runoff; '
-                    'glac_runoff is reduced by this amount each time step'
-                ),
-            }
-
             # if nsims > 1, store median-absolute deviation metrics
             if self.nsims > 1:
                 self.output_coords_dict['glac_prec_mad'] = collections.OrderedDict(

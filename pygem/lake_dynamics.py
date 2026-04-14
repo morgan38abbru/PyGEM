@@ -11,7 +11,7 @@ Lake-terminating glacier dynamics module.
 import logging
 import numpy as np
 from oggm import cfg
-from oggm.core.flowline import FluxBasedModel
+from oggm.core.flowline import SemiImplicitModel
 
 log = logging.getLogger(__name__)
 
@@ -20,9 +20,10 @@ log = logging.getLogger(__name__)
 LAKE_DEPTH_COEFF = 0.621
 LAKE_DEPTH_EXPONENT = 0.36
 
-class LakeFluxBasedModel(FluxBasedModel):
+
+class LakeSemiImplicitModel(SemiImplicitModel):
     """
-    FluxBasedModel adapted for existing lake-terminating glaciers.
+    SemiImplicitModel adapted for existing lake-terminating glaciers.
 
     Replaces OGGM's ocean-style below_sl mass removal with sequential
     bin calving: the calving bucket fills via q = calving_k * d * h * w,
@@ -41,7 +42,7 @@ class LakeFluxBasedModel(FluxBasedModel):
     moraine_elev : float
         Elevation of the terminal moraine [m a.s.l.], used to override
         water_level when the terminus bed is above it.
-    **kwargs : passed to FluxBasedModel (must include water_level)
+    **kwargs : passed to SemiImplicitModel (must include water_level)
     """
 
     def __init__(self, flowlines, moraine_elev=None, **kwargs):
@@ -157,10 +158,10 @@ class LakeFluxBasedModel(FluxBasedModel):
 
         return dt_actual
 
-    
-class NewLakeFluxBasedModel(LakeFluxBasedModel):
+
+class NewLakeSemiImplicitModel(LakeSemiImplicitModel):
     """
-    LakeFluxBasedModel with empirical area-depth ramp-up for newly formed lakes.
+    LakeSemiImplicitModel with empirical area-depth ramp-up for newly formed lakes.
 
     EMPIRICAL PHASE (active until d_emp >= d_actual):
     - A_lake is seeded with the area of the trigger bin (initial_seed_bin).
@@ -171,7 +172,7 @@ class NewLakeFluxBasedModel(LakeFluxBasedModel):
     - No separate below_sl removal during this phase
 
     STANDARD PHASE (d_emp >= d_actual):
-    - Permanently switches to LakeFluxBasedModel sequential calving
+    - Permanently switches to LakeSemiImplicitModel sequential calving
       using true water depth d_actual
 
     Parameters
@@ -182,7 +183,7 @@ class NewLakeFluxBasedModel(LakeFluxBasedModel):
     moraine_elev : float
         Moraine elevation used to set water_level if terminus bed is above
         the prescribed water_level [m a.s.l.]
-    **kwargs : passed to LakeFluxBasedModel (must include water_level)
+    **kwargs : passed to LakeSemiImplicitModel (must include water_level)
     """
 
     def __init__(self, flowlines, initial_seed_bin=None, moraine_elev=None,
@@ -236,10 +237,11 @@ class NewLakeFluxBasedModel(LakeFluxBasedModel):
     def step(self, dt):
         """Advance one timestep, using empirical depth until d_emp >= d_actual."""
 
-        # Run parent SIA + MB step with calving disabled
+        # Run parent SIA + MB step with calving disabled, skipping
+        # LakeSemiImplicitModel.step() to go directly to the solver
         was_calving = self.do_calving
         self.do_calving = False
-        dt_actual = super(LakeFluxBasedModel, self).step(dt)
+        dt_actual = super(LakeSemiImplicitModel, self).step(dt)
         self.do_calving = was_calving
 
         if not was_calving:
@@ -376,7 +378,7 @@ class NewLakeFluxBasedModel(LakeFluxBasedModel):
                     self._lake_volume_continuous += frac * bin_area * bin_depth
 
             else:
-                # Standard phase: same sequential calving as LakeFluxBasedModel
+                # Standard phase: sequential calving using true water depth
                 ice_bins_all = np.where(section > 0)[0]
                 if len(ice_bins_all) == 0:
                     fl.section = section

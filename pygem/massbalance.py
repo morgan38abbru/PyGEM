@@ -195,7 +195,6 @@ class PyGEMMassBalance(MassBalanceModel):
         self.glac_wide_volume_annual = np.zeros(self.nyears + 1)
         self.glac_wide_volume_change_ignored_annual = np.zeros(self.nyears)
         self.glac_wide_ELA_annual = np.zeros(self.nyears + 1)
-        self.glac_wide_supra_lake_storage = np.zeros(self.nsteps)
         self.glac_bin_supra_lake_annual = np.zeros((nbins, self.nyears + 1))
         self.glac_wide_proglacial_lake_area_annual = np.zeros(self.nyears + 1)
         self.glac_wide_proglacial_lake_volume_annual = np.zeros(self.nyears + 1)
@@ -1033,7 +1032,6 @@ class PyGEMMassBalance(MassBalanceModel):
                     * glacier_area_steps[glac_idx]
                 )
                 lake_storage = (extra_frac[:, np.newaxis] * bin_melt_period).sum(0)
-                self.glac_wide_supra_lake_storage[t_start : t_stop + 1] = lake_storage
                 self.glac_wide_runoff[t_start : t_stop + 1] -= lake_storage
 
             # Proglacial lake area and volume

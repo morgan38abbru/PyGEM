@@ -1036,22 +1036,55 @@ class PyGEMMassBalance(MassBalanceModel):
                 self.glac_wide_runoff[t_start : t_stop + 1] -= lake_storage
 
             # Proglacial lake area and volume
+            # Proglacial lake area and volume — annual snapshot with fractional terminus credit
+            # Fully ice-free OD bins contribute w0 * dx (bed width × bin length).
+            # The first OD bin still holding ice (active terminus) contributes a fractional
+            # area based on how much of its volume has been eaten into the calving bucket:
+            #   frac = min(calving_bucket_m3 / bin_volume, 1.0)
+            # Bins upglacier of the active terminus contribute nothing yet.
             if self.lake_od_bin_indices is not None and len(self.lake_od_bin_indices) > 0:
-                _dyn = getattr(self, '_dynamics_model', None)
-                self.glac_wide_proglacial_lake_area_annual[year_idx] = (
-                    _dyn._lake_area_continuous if _dyn is not None else 0.0
-                )
-                self.glac_wide_proglacial_lake_volume_annual[year_idx] = (
-                    _dyn._lake_volume_continuous if _dyn is not None else 0.0
-                )
-                # Binned proglacial water level: non-zero only for bins that have become open lake
-                # A bin is "open lake" when it has no ice (thickness == 0) and its bed is
-                # within the overdeepened zone (lake_od_bin_indices).
-                _wl = self.lake_water_level  # scalar m a.s.l., set in run_simulation
+                fl = fls[fl_id]
+                lake_area   = 0.0
+                lake_volume = 0.0
+                found_partial = False
+                for i, b in enumerate(self.lake_od_bin_indices):
+                    if fl.thick[b] < 1.0:
+                        # Fully ice-free bin
+                        w0 = (
+                            float(self.lake_od_bin_w0[i])
+                            if self.lake_od_bin_w0 is not None and i < len(self.lake_od_bin_w0)
+                            else float(fl.widths_m[b])
+                        )
+                        bin_area    = w0 * fl.dx_meter
+                        bin_depth   = max(float(self.lake_water_level) - float(self.lake_od_bin_bed_h[i]), 0.0)
+                        lake_area  += bin_area
+                        lake_volume += bin_area * bin_depth
+                    elif not found_partial:
+                        # First bin still holding ice — fractional credit from calving bucket
+                        found_partial = True
+                        bin_vol = float(fl.section[b]) * fl.dx_meter
+                        if bin_vol > 0:
+                            frac = min(float(fl.calving_bucket_m3) / bin_vol, 1.0)
+                            w0 = (
+                                float(self.lake_od_bin_w0[i])
+                                if self.lake_od_bin_w0 is not None and i < len(self.lake_od_bin_w0)
+                                else float(fl.widths_m[b])
+                            )
+                            bin_area    = frac * w0 * fl.dx_meter
+                            bin_depth   = max(float(self.lake_water_level) - float(self.lake_od_bin_bed_h[i]), 0.0)
+                            lake_area  += bin_area
+                            lake_volume += bin_area * bin_depth
+                        # All bins upglacier of here: break
+                        break
+                    else:
+                        break
+                self.glac_wide_proglacial_lake_area_annual[year_idx]   = lake_area
+                self.glac_wide_proglacial_lake_volume_annual[year_idx] = lake_volume
+
+                _wl = self.lake_water_level
                 if _wl is not None:
-                    fl = fls[fl_id]
                     for b in self.lake_od_bin_indices:
-                        if fl.thick[b] == 0.0:
+                        if fl.thick[b] < 1.0:
                             self.glac_bin_proglacial_water_level_annual[b, year_idx] = _wl
 
             # Snow line altitude (m a.s.l.)

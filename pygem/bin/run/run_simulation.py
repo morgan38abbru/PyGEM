@@ -1057,9 +1057,17 @@ def run(list_packed_vars):
                                 and _bed_init[b] < _wl
                                 and _ga_init[b] > 0
                             ], dtype=int)
+                            # Initial ice volume per OD bin, referenced to simulation start (RGI initial).
+                            # Used as the denominator for fractional fill in the proglacial-lake bucket model.
+                            _thick_init = _fl_init.thick
+                            if len(_valid_od_bins) > 0:
+                                _vol_init_od = (_ga_init[_valid_od_bins] * _thick_init[_valid_od_bins]).copy()
+                            else:
+                                _vol_init_od = np.array([])
                             mbmod.lake_od_bin_indices = _valid_od_bins
                             mbmod.lake_od_bin_areas = _ga_init[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
                             mbmod.lake_od_bin_bed_h = _bed_init[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
+                            mbmod.lake_od_bin_volumes_init = _vol_init_od
                             mbmod.lake_water_level = _wl
 
                             diag, ds = ev_model.run_until_and_store(
@@ -1265,7 +1273,12 @@ def run(list_packed_vars):
                                 ev_model.mb_model.glac_wide_massbaltotal
                                 - ev_model.mb_model.glac_wide_frontalablation
                             )
-
+                            # Now that frontal ablation is populated for all steps,
+                            # compute the fractional proglacial-lake trajectory.
+                            ev_model.mb_model.finalize_proglacial_lake_fractional(
+                                density_ice=pygem_prms['constants']['density_ice'],
+                                density_water=pygem_prms['constants']['density_water'],
+                            )
                             if debug:
                                 print(
                                     'avg calving_m3:',

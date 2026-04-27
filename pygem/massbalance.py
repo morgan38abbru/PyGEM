@@ -101,6 +101,7 @@ class PyGEMMassBalance(MassBalanceModel):
         self.lake_od_bin_indices = None
         self.lake_od_bin_areas = None
         self.lake_od_bin_bed_h = None
+        self.lake_od_bin_volumes_init = None
         self.lake_water_level = None
         self.heights = fls[fl_id].surface_h
         if pygem_prms['mb']['include_debris'] and not ignore_debris and not gdir.is_tidewater:
@@ -1034,35 +1035,12 @@ class PyGEMMassBalance(MassBalanceModel):
                 self.glac_wide_supra_lake_storage[t_start : t_stop + 1] = lake_storage
                 self.glac_wide_runoff[t_start : t_stop + 1] -= lake_storage
 
-            # Proglacial lake area and volume
-            # Only computed when water_level and moraine_elev are set on the gdir
-            # (i.e. for lake-terminating glaciers)
-            # Area: sum of bin areas where ice has been lost AND bed is below water level
-            #        (these are the bins now inundated by the lake)
-            # Volume: sum of bin_area * (water_level - bed_h) for those same bins,
-            #         clamped so depth is never negative
-            if self.lake_od_bin_indices is not None and len(self.lake_od_bin_indices) > 0:
-                # Get current glacier area at the tracked OD bin indices
-                # These indices refer to the model flowline coordinate system
-                ga_now_at_od = np.array([
-                    glacier_area[b] if b < len(glacier_area) else 0.0
-                    for b in self.lake_od_bin_indices
-                ])
-                # A bin contributes lake area when it was ice-covered at lake
-                # formation (stored in lake_od_bin_areas) and is now ice-free
-                calved_mask = (self.lake_od_bin_areas > 0) & (ga_now_at_od == 0)
-                if calved_mask.any():
-                    lake_area = self.lake_od_bin_areas[calved_mask].sum()
-                    depth_per_bin = np.maximum(
-                        self.lake_water_level - self.lake_od_bin_bed_h[calved_mask], 0
-                    )
-                    lake_volume = (self.lake_od_bin_areas[calved_mask] * depth_per_bin).sum()
-                else:
-                    lake_area = 0.0
-                    lake_volume = 0.0
-                self.glac_wide_proglacial_lake_area_annual[year_idx] = lake_area
-                self.glac_wide_proglacial_lake_volume_annual[year_idx] = lake_volume
-
+            # Proglacial lake area and volume are computed in a post-processing pass
+            # (see finalize_proglacial_lake_fractional) because they depend on
+            # cumulative frontal ablation, which is only wired in after run_until_and_store
+            # completes on the OGGM dynamics path. Leave zeros here as placeholders.
+            self.glac_wide_proglacial_lake_area_annual[year_idx] = 0.0
+            self.glac_wide_proglacial_lake_volume_annual[year_idx] = 0.0
 
             # Snow line altitude (m a.s.l.)
             heights_steps = heights[:, np.newaxis].repeat((t_stop + 1) - t_start, axis=1)
@@ -1200,6 +1178,88 @@ class PyGEMMassBalance(MassBalanceModel):
 
         self.glac_wide_volume_change_ignored_annual = vol_change_annual_dif
 
+    def finalize_proglacial_lake_fractional(self, density_ice=None, density_water=None):
+        """Post-process lake area/volume from cumulative frontal ablation.
+
+        Converts the bin-discrete lake footprint to a fractional one: each OD bin,
+        ordered strictly terminus-first, is filled in proportion to how much of its
+        initial ice volume has been consumed by cumulative frontal ablation since
+        simulation start.
+
+        Must be called after `glac_wide_frontalablation` has been populated for all
+        time steps (i.e., after the dynamics model's run_until_and_store and the
+        subsequent frontalablation wiring in run_simulation.py).
+
+        Parameters
+        ----------
+        density_ice : float
+            kg m-3. Required because glac_wide_frontalablation is stored in
+            m3 w.e. and must be converted to m3 of ice.
+        density_water : float
+            kg m-3. Same reason.
+        """
+        # Nothing to do if the glacier has no proglacial lake
+        if (self.lake_od_bin_indices is None
+                or len(self.lake_od_bin_indices) == 0
+                or self.lake_od_bin_volumes_init is None):
+            return
+
+        if density_ice is None or density_water is None:
+            raise ValueError(
+                'finalize_proglacial_lake_fractional requires density_ice and density_water'
+            )
+
+        # Order bins strictly terminus-first. Under PyGEM's convention, larger
+        # flowline indices are downstream (closer to the terminus), so sort descending.
+        order = np.argsort(-self.lake_od_bin_indices)
+        vol_init_ordered = self.lake_od_bin_volumes_init[order]
+        area_init_ordered = self.lake_od_bin_areas[order]
+        bed_h_ordered = self.lake_od_bin_bed_h[order]
+
+        # Depth per bin at the fixed water level, clamped non-negative
+        depth_ordered = np.maximum(self.lake_water_level - bed_h_ordered, 0.0)
+
+        # Cumulative "capacity" before bin k (m3 of ice) — strict terminus-first
+        # means bin k doesn't start filling until sum of earlier V0's has been spent.
+        cum_capacity_before = np.concatenate(([0.0], np.cumsum(vol_init_ordered)[:-1]))
+
+        # Convert frontal ablation from m3 w.e. to m3 of ice.
+        # glac_wide_frontalablation is per-step (monthly); cumsum over steps.
+        fa_ice_per_step = (
+            self.glac_wide_frontalablation * density_water / density_ice
+        )
+        fa_cum_per_step = np.cumsum(fa_ice_per_step)
+
+        # We need the cumulative value at each annual boundary. Use the end-of-year
+        # step index for each year.
+        nyears = self.nyears
+        for year_idx in range(nyears + 1):
+            if year_idx == 0:
+                fa_cum = 0.0
+            else:
+                # get_step_inds returns (tstart, tstop) inclusive; end-of-year is tstop
+                _, tstop = self.get_step_inds(self.dates_table.loc[0, 'wateryear'] + year_idx - 1) \
+                    if hasattr(self, 'dates_table') else (None, None)
+                # Fallback: assume step indices are contiguous and we have 12 steps/year
+                step_end = min(year_idx * 12 - 1, len(fa_cum_per_step) - 1) \
+                    if tstop is None else tstop
+                fa_cum = fa_cum_per_step[step_end] if step_end >= 0 else 0.0
+
+            remaining_per_bin = np.maximum(fa_cum - cum_capacity_before, 0.0)
+            # Fractional fill per bin, clamped to [0, 1]
+            frac = np.where(
+                vol_init_ordered > 0,
+                np.minimum(remaining_per_bin / np.where(vol_init_ordered > 0, vol_init_ordered, 1.0), 1.0),
+                0.0,
+            )
+
+            self.glac_wide_proglacial_lake_area_annual[year_idx] = (
+                (frac * area_init_ordered).sum()
+            )
+            self.glac_wide_proglacial_lake_volume_annual[year_idx] = (
+                (frac * area_init_ordered * depth_ordered).sum()
+            )
+
     # ===== SURFACE TYPE FUNCTIONS =====
     def _surfacetypebinsinitial(self, elev_bins):
         """
@@ -1257,7 +1317,7 @@ class PyGEMMassBalance(MassBalanceModel):
             #  everything initially considered snow is considered firn, i.e., the model initially assumes there is no
             #  snow on the surface anywhere.
         return surfacetype, firnline_idx
-
+    
     def _surfacetypebinsannual(self, surfacetype, glac_bin_massbalclim_annual, year_idx):
         """
         Update surface type according to climatic mass balance over the last five years.

@@ -842,6 +842,22 @@ class binned_stats(single_glacier):
             'temporal_resolution': self.timestep,
             'comment': 'climatic mass balance from the PyGEM mass balance module',
         }
+        self.output_coords_dict['bin_supra_lake_annual'] = collections.OrderedDict(
+            [
+                ('glac', self.glac_values),
+                ('bin', self.bin_values),
+                ('year', self.year_values),
+            ]
+        )
+        self.output_attrs_dict['bin_supra_lake_annual'] = {
+            'long_name': 'binned supraglacial lake fractional coverage',
+            'units': '-',
+            'temporal_resolution': 'annual',
+            'comment': (
+                'fraction of each elevation bin covered by supraglacial lakes (0-1); '
+                'recorded at the start of each model year, before the annual growth step'
+            ),
+        }
 
         # optionally store binned mass balance components
         if self.binned_components:

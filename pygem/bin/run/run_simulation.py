@@ -48,7 +48,7 @@ import pygem.gcmbiasadj as gcmbiasadj
 import pygem.pygem_modelsetup as modelsetup
 from pygem import class_climate, output
 from pygem.glacierdynamics import MassRedistributionCurveModel
-from pygem.lake_dynamics import LakeSemiImplicitModel
+from pygem.lake_dynamics import LakeSemiImplicitModel, NewLakeSemiImplicitModel 
 from pygem.massbalance import PyGEMMassBalance
 from pygem.oggm_compat import (
     get_spinup_flowlines,
@@ -1024,6 +1024,7 @@ def run(list_packed_vars):
                                 fs=fs,
                                 is_tidewater=True,
                                 water_level=water_level,
+                                moraine_elev=moraine_elev,
                             )
                             diag, ds = ev_model.run_until_and_store(
                                 args.sim_endyear + 1, fl_diag_path=True
@@ -1033,15 +1034,130 @@ def run(list_packed_vars):
                             ev_model.mb_model.glac_wide_proglacial_lake_area_annual[:] = ev_model._lake_area_continuous
                             ev_model.mb_model.glac_wide_proglacial_lake_volume_annual[:] = ev_model._lake_volume_continuous
 
-                        # SemiImplicitModel is newer numerical solver, but does not yet include frontal ablation 
+                        # Land-terminating: optionally detect new lake formation
                         else:
-                            ev_model = SemiImplicitModel(
-                                nfls,
-                                y0=args.sim_startyear,
-                                mb_model=mbmod,
-                                glen_a=glen_a,
-                                fs=fs,
-                            )
+                            cfg.PARAMS['use_kcalving_for_run'] = False
+                            lake_formation_info = None
+                            lake_formed = False
+
+                            if pygem_prms['setup'].get('enable_lake_formation', False):
+                                threshold_depth = pygem_prms['setup'].get(
+                                    'lake_formation_threshold_depth', 20.0
+                                )
+                                lake_formation_info = lake.detect_lake_formation_potential(
+                                    nfls, threshold_depth=threshold_depth
+                                )
+                                if debug and lake_formation_info is not None:
+                                    print(
+                                        f'Lake formation potential detected: '
+                                        f'moraine={lake_formation_info["moraine_elevation"]:.1f} m, '
+                                        f'water_level={lake_formation_info["lake_water_level"]:.1f} m, '
+                                        f'{len(lake_formation_info["overdeepened_bins"])} OD bins'
+                                    )
+
+                            if lake_formation_info is not None:
+                                od_bins = lake_formation_info['overdeepened_bins']
+                                wl_trigger = lake_formation_info['lake_water_level']
+
+                                # --- Detection pass: year-by-year probe ---
+                                ev_model_probe = SemiImplicitModel(
+                                    copy.deepcopy(nfls),
+                                    y0=args.sim_startyear,
+                                    mb_model=mbmod,
+                                    glen_a=glen_a,
+                                    fs=fs,
+                                    water_level=0.0,
+                                )
+                                year_of_formation = None
+                                seed_bin = None
+
+                                for year in range(args.sim_startyear, args.sim_endyear + 1):
+                                    ev_model_probe.run_until(year + 1)
+                                    surf = ev_model_probe.fls[0].surface_h
+                                    triggered = [b for b in od_bins if surf[b] <= wl_trigger]
+                                    if triggered:
+                                        year_of_formation = year
+                                        seed_bin = int(max(triggered))
+                                        if debug:
+                                            print(
+                                                f'Lake formation triggered at year {year_of_formation}, '
+                                                f'seed_bin={seed_bin}'
+                                            )
+                                        break
+
+                                if year_of_formation is not None:
+                                    lake_formed = True
+
+                                    # --- Phase 1: clean land run to year before formation ---
+                                    lake_start_year = max(year_of_formation - 1, args.sim_startyear)
+                                    ev_model_land = SemiImplicitModel(
+                                        nfls,
+                                        y0=args.sim_startyear,
+                                        mb_model=mbmod,
+                                        glen_a=glen_a,
+                                        fs=fs,
+                                        water_level=0.0,
+                                    )
+                                    diag_land, ds_land = ev_model_land.run_until_and_store(
+                                        lake_start_year, fl_diag_path=True
+                                    )
+
+                                    # --- Phase 2: lake run from year of formation ---
+                                    calving_k_new = pygem_prms['setup'].get(
+                                        'lake_formation_calving_k', 0.3
+                                    )
+                                    cfg.PARAMS['calving_k'] = calving_k_new
+                                    cfg.PARAMS['use_kcalving_for_run'] = True
+
+                                    _fl_at_formation = ev_model_land.fls[0]
+                                    _ga_at_formation = (
+                                        _fl_at_formation.widths_m * _fl_at_formation.dx_meter
+                                    ).copy()
+                                    _bed = _fl_at_formation.bed_h
+                                    _wl = lake_formation_info['lake_water_level']
+                                    _od_bins = lake_formation_info['overdeepened_bins']
+                                    # Keep only OD bins with bed below water level and ice present
+                                    _valid_od_bins = np.array([
+                                        b for b in _od_bins
+                                        if b < len(_bed)
+                                        and _bed[b] < _wl
+                                        and _ga_at_formation[b] > 0
+                                    ], dtype=int)
+
+                                    ev_model_lake = NewLakeSemiImplicitModel(
+                                        copy.deepcopy(ev_model_land.fls),
+                                        y0=lake_start_year,
+                                        mb_model=mbmod,
+                                        glen_a=glen_a,
+                                        fs=fs,
+                                        is_tidewater=True,
+                                        water_level=lake_formation_info['lake_water_level'],
+                                        moraine_elev=lake_formation_info['moraine_elevation'],
+                                        initial_seed_bin=seed_bin,
+                                    )
+                                    diag_lake, ds_lake = ev_model_lake.run_until_and_store(
+                                        args.sim_endyear + 1, fl_diag_path=True
+                                    )
+
+                                    # Drop duplicate boundary timestep and concatenate
+                                    diag_lake = diag_lake.isel(time=slice(1, None))
+                                    ds_lake_fl = ds_lake[0].isel(time=slice(1, None))
+                                    diag = xr.concat([diag_land, diag_lake], dim='time')
+                                    ds = [xr.concat([ds_land[0], ds_lake_fl], dim='time')]
+                                    ev_model = ev_model_lake
+                                    ev_model.mb_model.glac_wide_volume_annual[-1] = diag.volume_m3.values[-1]
+                                    ev_model.mb_model.glac_wide_area_annual[-1] = diag.area_m2.values[-1]
+                                    ev_model.mb_model.glac_wide_proglacial_lake_area_annual[:] = ev_model._lake_area_continuous
+                                    ev_model.mb_model.glac_wide_proglacial_lake_volume_annual[:] = ev_model._lake_volume_continuous
+
+                            if not lake_formed:
+                                ev_model = SemiImplicitModel(
+                                    nfls,
+                                    y0=args.sim_startyear,
+                                    mb_model=mbmod,
+                                    glen_a=glen_a,
+                                    fs=fs,
+                                )
 
                         if debug:
                             fig, ax = plt.subplots(1)
@@ -1049,13 +1165,13 @@ def run(list_packed_vars):
                                 ev_model, ax=ax, lnlabel=f'Glacier year {args.sim_startyear}'
                             )
 
-                        if not is_lake_glacier:
+                        if not is_lake_glacier and not lake_formed:
                             diag, ds = ev_model.run_until_and_store(args.sim_endyear + 1, fl_diag_path=True)
                             ev_model.mb_model.glac_wide_volume_annual[-1] = diag.volume_m3[-1]
                             ev_model.mb_model.glac_wide_area_annual[-1] = diag.area_m2[-1]
 
                         # Record frontal ablation for tidewater glaciers and update total mass balance
-                        if gdir.is_tidewater or is_lake_glacier:
+                        if gdir.is_tidewater or is_lake_glacier or lake_formed:
                             # Glacier-wide frontal ablation (m3 w.e.)
                             # - note: diag.calving_m3 is cumulative calving
                             if debug:

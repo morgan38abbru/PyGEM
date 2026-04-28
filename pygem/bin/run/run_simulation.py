@@ -972,6 +972,7 @@ def run(list_packed_vars):
                         # Water Level
                         if is_lake_glacier:
                             water_level = lake_info['water_level']
+                            moraine_elev = lake_info['moraine_elev']
                         else:
                             cls = gdir.read_pickle('inversion_input')[-1]
                             th = cls['hgt'][-1]

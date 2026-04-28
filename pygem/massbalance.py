@@ -46,6 +46,7 @@ class PyGEMMassBalance(MassBalanceModel):
         heights=None,
         inversion_filter=False,
         ignore_debris=False,
+        water_level=None
     ):
         """Initialize.
 
@@ -186,6 +187,8 @@ class PyGEMMassBalance(MassBalanceModel):
         self.glac_wide_volume_change_ignored_annual = np.zeros(self.nyears)
         self.glac_wide_ELA_annual = np.zeros(self.nyears + 1)
         self.glac_bin_supra_lake_annual = np.zeros((nbins, self.nyears + 1))
+        self.glac_wide_proglacial_lake_area_annual = np.zeros(self.nyears + 1)
+        self.glac_wide_proglacial_lake_volume_annual = np.zeros(self.nyears + 1)
         self.offglac_wide_prec = np.zeros(self.nsteps)
         self.offglac_wide_refreeze = np.zeros(self.nsteps)
         self.offglac_wide_melt = np.zeros(self.nsteps)
@@ -243,7 +246,9 @@ class PyGEMMassBalance(MassBalanceModel):
         """
         step_idxs = np.where(self.dates_table.year == int(year))[0]
         if step_idxs.size == 0:
-            raise ValueError(f'Year {year} not found in dates_table.')
+            # Boundary year beyond dates table - return last valid indices
+            last_idxs = np.where(self.dates_table.year == self.years[-1])[0]
+            return last_idxs[0], last_idxs[-1]
         return step_idxs[0], step_idxs[-1]
 
     def get_annual_mb(

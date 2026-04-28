@@ -162,3 +162,43 @@ def supra_lake_binned(gdir, fl_str='inversion_flowlines', filesuffix=''):
 
         # Overwrite pickle
         gdir.write_pickle(flowlines, fl_str, filesuffix=filesuffix)
+
+def load_lake_calving_data(pygem_prms, rgiid):
+    """
+    Check whether an RGI glacier has a calibrated proglacial lake entry.
+
+    Parameters
+    ----------
+    pygem_prms : dict
+        PyGEM configuration dictionary
+    rgiid : str
+        RGI glacier ID string
+
+    Returns
+    -------
+    dict or None
+        If found: {'calving_k': float, 'water_level': float}
+        Returns None if no lake entry exists or calving_k is NaN.
+    """
+    import pandas as pd
+
+    lake_fa_fp = (
+        pygem_prms['root']
+        + pygem_prms['calib']['data']['frontalablation']['frontalablation_relpath']
+        + pygem_prms['calib']['data']['frontalablation']['lake_fa_cal_fn']
+    )
+    if not os.path.exists(lake_fa_fp):
+        return None
+
+    lake_fa_df = pd.read_csv(lake_fa_fp)
+    if rgiid not in list(lake_fa_df['RGIId']):
+        return None
+
+    row = lake_fa_df.loc[lake_fa_df['RGIId'] == rgiid].iloc[0]
+    if pd.isna(row['calving_k']):
+        return None
+
+    return {
+        'calving_k': float(row['calving_k']),
+        'water_level': float(row['water_level']),
+    }

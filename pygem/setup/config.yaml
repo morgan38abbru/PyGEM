@@ -217,6 +217,7 @@ calib:
     frontalablation:
       frontalablation_relpath: /frontalablation_data/                                               # relative to main data path
       frontalablation_cal_fn: all-frontalablation_cal_ind.csv                                       # merged frontalablation calibration data (produced by run_calibration_frontalablation.py)
+      lake_fa_cal_fn: lake_calving_calibrated.csv                                                   # frontal ablation calibration data for lake terminating glacier (run_calibration_frontalablation_laketerm.py) #placeholder... need to determine where calibration will be avaiable
     # ice thickness
     icethickness:
       h_ref_relpath: /IceThickness_Farinotti/composite_thickness_RGI60-all_regions/

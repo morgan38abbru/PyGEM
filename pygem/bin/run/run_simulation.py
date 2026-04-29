@@ -863,6 +863,8 @@ def run(list_packed_vars):
                 output_glac_mass_bsl_annual = np.zeros((year_values.shape[0], nsims)) * np.nan
                 output_glac_mass_change_ignored_annual = np.zeros((year_values.shape[0], nsims))
                 output_glac_ELA_annual = np.zeros((year_values.shape[0], nsims)) * np.nan
+                output_glac_proglacial_lake_area_annual = np.zeros((year_values.shape[0], nsims))
+                output_glac_proglacial_lake_volume_annual = np.zeros((year_values.shape[0], nsims))
                 output_offglac_prec_steps = np.zeros((dates_table.shape[0], nsims)) * np.nan
                 output_offglac_refreeze_steps = np.zeros((dates_table.shape[0], nsims)) * np.nan
                 output_offglac_melt_steps = np.zeros((dates_table.shape[0], nsims)) * np.nan
@@ -987,6 +989,15 @@ def run(list_packed_vars):
                     surface_h_initial = nfls[0].surface_h
 
                     # ------ MODEL WITH EVOLVING AREA ------
+                    # Stamp proglacial lake geometry onto gdir so mbmod.__init__ picks it up
+                    if is_lake_glacier:
+                        gdir.proglacial_water_level = lake_info['water_level']
+                        gdir.proglacial_moraine_elev = lake_info['moraine_elev']
+                    else:
+                        gdir.proglacial_water_level = None
+                        gdir.proglacial_moraine_elev = None
+
+                    # AFTER
                     # Mass balance model
                     mbmod = PyGEMMassBalance(
                         gdir,
@@ -995,6 +1006,37 @@ def run(list_packed_vars):
                         fls=nfls,
                         option_areaconstant=False,
                     )
+
+                    # Wire OD bin geometry onto mbmod for existing lake glaciers
+                    if is_lake_glacier:
+                        _fl  = nfls[0]
+                        _bed = _fl.bed_h
+                        _wl  = lake_info['water_level']
+                        _moraine = (
+                            lake_info['moraine_elev']
+                            if lake_info['moraine_elev'] is not None
+                            else _wl + 20.0
+                        )
+                        _terminus_bins = np.where(_fl.thick > 1.0)[0]
+                        if len(_terminus_bins) > 0:
+                            _t = int(_terminus_bins[-1])
+                            _od_bins = []
+                            for _i in range(_t, -1, -1):
+                                if _bed[_i] < _moraine:
+                                    _od_bins.append(_i)
+                                else:
+                                    break
+                            _od_bins = np.array(_od_bins, dtype=int)
+                        else:
+                            _od_bins = np.array([], dtype=int)
+                        _valid = np.array(
+                            [b for b in _od_bins if _bed[b] < _wl], dtype=int
+                        )
+                        mbmod.lake_od_bin_indices    = _valid
+                        mbmod.lake_od_bin_areas      = (_fl.widths_m[_valid] * _fl.dx_meter).copy() if len(_valid) > 0 else np.array([])
+                        mbmod.lake_od_bin_bed_h      = _bed[_valid].copy() if len(_valid) > 0 else np.array([])
+                        mbmod.lake_od_bin_volumes_init = (_fl.widths_m[_valid] * _fl.dx_meter * _fl.thick[_valid]).copy() if len(_valid) > 0 else np.array([])
+                        mbmod.lake_water_level       = _wl
 
                     ######################################
                     ### OGGM dynamical evolution model ###
@@ -1032,8 +1074,6 @@ def run(list_packed_vars):
                             )
                             ev_model.mb_model.glac_wide_volume_annual[-1] = diag.volume_m3.values[-1]
                             ev_model.mb_model.glac_wide_area_annual[-1] = diag.area_m2.values[-1]
-                            ev_model.mb_model.glac_wide_proglacial_lake_area_annual[:] = ev_model._lake_area_continuous
-                            ev_model.mb_model.glac_wide_proglacial_lake_volume_annual[:] = ev_model._lake_volume_continuous
 
                         # Land-terminating: optionally detect new lake formation
                         else:
@@ -1055,7 +1095,7 @@ def run(list_packed_vars):
                                         f'water_level={lake_formation_info["lake_water_level"]:.1f} m, '
                                         f'{len(lake_formation_info["overdeepened_bins"])} OD bins'
                                     )
-
+                            
                             if lake_formation_info is not None:
                                 od_bins = lake_formation_info['overdeepened_bins']
                                 wl_trigger = lake_formation_info['lake_water_level']
@@ -1125,6 +1165,13 @@ def run(list_packed_vars):
                                         and _ga_at_formation[b] > 0
                                     ], dtype=int)
 
+                                    mbmod.lake_od_bin_indices     = _valid_od_bins
+                                    mbmod.lake_od_bin_areas       = _ga_at_formation[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
+                                    mbmod.lake_od_bin_bed_h       = _bed[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
+                                    _thick_at_formation           = _fl_at_formation.thick
+                                    mbmod.lake_od_bin_volumes_init = (_ga_at_formation[_valid_od_bins] * _thick_at_formation[_valid_od_bins]).copy() if len(_valid_od_bins) > 0 else np.array([])
+                                    mbmod.lake_water_level        = _wl
+
                                     ev_model_lake = NewLakeSemiImplicitModel(
                                         copy.deepcopy(ev_model_land.fls),
                                         y0=lake_start_year,
@@ -1148,8 +1195,6 @@ def run(list_packed_vars):
                                     ev_model = ev_model_lake
                                     ev_model.mb_model.glac_wide_volume_annual[-1] = diag.volume_m3.values[-1]
                                     ev_model.mb_model.glac_wide_area_annual[-1] = diag.area_m2.values[-1]
-                                    ev_model.mb_model.glac_wide_proglacial_lake_area_annual[:] = ev_model._lake_area_continuous
-                                    ev_model.mb_model.glac_wide_proglacial_lake_volume_annual[:] = ev_model._lake_volume_continuous
 
                             if not lake_formed:
                                 ev_model = SemiImplicitModel(
@@ -1170,17 +1215,8 @@ def run(list_packed_vars):
                             diag, ds = ev_model.run_until_and_store(args.sim_endyear + 1, fl_diag_path=True)
                             ev_model.mb_model.glac_wide_volume_annual[-1] = diag.volume_m3[-1]
                             ev_model.mb_model.glac_wide_area_annual[-1] = diag.area_m2[-1]
-
-                        # Record frontal ablation for tidewater glaciers and update total mass balance
+                            
                         if gdir.is_tidewater or is_lake_glacier or lake_formed:
-                            # Glacier-wide frontal ablation (m3 w.e.)
-                            # - note: diag.calving_m3 is cumulative calving
-                            if debug:
-                                print('\n\ndiag.calving_m3:', diag.calving_m3.values)
-                                print(
-                                    'calving_m3_since_y0:',
-                                    ev_model.calving_m3_since_y0,
-                                )
                             calving_m3_annual = (
                                 (diag.calving_m3.values[1:] - diag.calving_m3.values[0:-1])
                                 * pygem_prms['constants']['density_ice']
@@ -1189,11 +1225,15 @@ def run(list_packed_vars):
                             for n, year in enumerate(np.arange(args.sim_startyear, args.sim_endyear + 1)):
                                 tstart, tstop = ev_model.mb_model.get_step_inds(year)
                                 ev_model.mb_model.glac_wide_frontalablation[tstop] = calving_m3_annual[n]
-
-                            # Glacier-wide total mass balance (m3 w.e.)
                             ev_model.mb_model.glac_wide_massbaltotal = (
-                                ev_model.mb_model.glac_wide_massbaltotal - ev_model.mb_model.glac_wide_frontalablation
+                                ev_model.mb_model.glac_wide_massbaltotal
+                                - ev_model.mb_model.glac_wide_frontalablation
                             )
+                            if is_lake_glacier or lake_formed:
+                                ev_model.mb_model.finalize_proglacial_lake_fractional(
+                                    density_ice=pygem_prms['constants']['density_ice'],
+                                    density_water=pygem_prms['constants']['density_water'],
+                                )
 
                             if debug:
                                 print(
@@ -1395,6 +1435,12 @@ def run(list_packed_vars):
                             mbmod.glac_wide_volume_change_ignored_annual * pygem_prms['constants']['density_ice']
                         )
                         output_glac_ELA_annual[:, n_iter] = mbmod.glac_wide_ELA_annual
+                        output_glac_proglacial_lake_area_annual[:, n_iter] = (
+                            mbmod.glac_wide_proglacial_lake_area_annual
+                        )
+                        output_glac_proglacial_lake_volume_annual[:, n_iter] = (
+                            mbmod.glac_wide_proglacial_lake_volume_annual
+                        )
                         output_offglac_prec_steps[:, n_iter] = mbmod.offglac_wide_prec
                         output_offglac_refreeze_steps[:, n_iter] = mbmod.offglac_wide_refreeze
                         output_offglac_melt_steps[:, n_iter] = mbmod.offglac_wide_melt
@@ -1595,6 +1641,12 @@ def run(list_packed_vars):
                                     output_glac_mass_change_ignored_annual[:, n_iter]
                                 )
                                 output_ds_all_stats['offglac_prec'].values[0, :] = output_offglac_prec_steps[:, n_iter]
+                                output_ds_all_stats['glac_proglacial_lake_area_annual'].values[0, :] = (
+                                    output_glac_proglacial_lake_area_annual[:, n_iter]
+                                )
+                                output_ds_all_stats['glac_proglacial_lake_volume_annual'].values[0, :] = (
+                                    output_glac_proglacial_lake_volume_annual[:, n_iter]
+                                )
                                 output_ds_all_stats['offglac_melt'].values[0, :] = output_offglac_melt_steps[:, n_iter]
                                 output_ds_all_stats['offglac_refreeze'].values[0, :] = output_offglac_refreeze_steps[
                                     :, n_iter
@@ -1650,6 +1702,12 @@ def run(list_packed_vars):
                             output_glac_mass_change_ignored_annual
                         )
                         output_offglac_prec_steps_stats = calc_stats_array(output_offglac_prec_steps)
+                        output_glac_proglacial_lake_area_stats = calc_stats_array(
+                            output_glac_proglacial_lake_area_annual
+                        )
+                        output_glac_proglacial_lake_volume_stats = calc_stats_array(
+                            output_glac_proglacial_lake_volume_annual
+                        )
                         output_offglac_melt_steps_stats = calc_stats_array(output_offglac_melt_steps)
                         output_offglac_refreeze_steps_stats = calc_stats_array(output_offglac_refreeze_steps)
                         output_offglac_snowpack_steps_stats = calc_stats_array(output_offglac_snowpack_steps)
@@ -1678,6 +1736,12 @@ def run(list_packed_vars):
                             output_glac_mass_change_ignored_annual_stats[:, 0]
                         )
                         output_ds_all_stats['offglac_prec'].values[0, :] = output_offglac_prec_steps_stats[:, 0]
+                        output_ds_all_stats['glac_proglacial_lake_area_annual'].values[0, :] = (
+                            output_glac_proglacial_lake_area_stats[:, 0]
+                        )
+                        output_ds_all_stats['glac_proglacial_lake_volume_annual'].values[0, :] = (
+                            output_glac_proglacial_lake_volume_stats[:, 0]
+                        )
                         output_ds_all_stats['offglac_melt'].values[0, :] = output_offglac_melt_steps_stats[:, 0]
                         output_ds_all_stats['offglac_refreeze'].values[0, :] = output_offglac_refreeze_steps_stats[:, 0]
                         output_ds_all_stats['offglac_snowpack'].values[0, :] = output_offglac_snowpack_steps_stats[:, 0]
@@ -1714,6 +1778,12 @@ def run(list_packed_vars):
                                 output_glac_mass_change_ignored_annual_stats[:, 1]
                             )
                             output_ds_all_stats['offglac_prec_mad'].values[0, :] = output_offglac_prec_steps_stats[:, 1]
+                            output_ds_all_stats['glac_proglacial_lake_area_annual_mad'].values[0, :] = (
+                                output_glac_proglacial_lake_area_stats[:, 1]
+                            )
+                            output_ds_all_stats['glac_proglacial_lake_volume_annual_mad'].values[0, :] = (
+                                output_glac_proglacial_lake_volume_stats[:, 1]
+                            )
                             output_ds_all_stats['offglac_melt_mad'].values[0, :] = output_offglac_melt_steps_stats[:, 1]
                             output_ds_all_stats['offglac_refreeze_mad'].values[0, :] = (
                                 output_offglac_refreeze_steps_stats[:, 1]

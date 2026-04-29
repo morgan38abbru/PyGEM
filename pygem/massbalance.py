@@ -92,6 +92,11 @@ class PyGEMMassBalance(MassBalanceModel):
         self.modelprms = modelprms
         self.glacier_rgi_table = glacier_rgi_table
         self.is_tidewater = gdir.is_tidewater
+        self.lake_od_bin_indices = None     # set from run_simulation after mbmod construction
+        self.lake_od_bin_areas = None       # initial bin area (widths_m * dx_meter) at each OD bin
+        self.lake_od_bin_bed_h = None       # bed elevation at each OD bin
+        self.lake_od_bin_volumes_init = None  # initial ice volume at each OD bin
+        self.lake_water_level = None        # water level for depth calculation
         self.icethickness_initial = getattr(fls[fl_id], 'thick', None)
         self.width_initial = fls[fl_id].widths_m
         self.glacier_area_initial = fls[fl_id].widths_m * fls[fl_id].dx_meter
@@ -1146,6 +1151,72 @@ class PyGEMMassBalance(MassBalanceModel):
         self.glac_wide_runoff = self.glac_wide_prec + self.glac_wide_melt - self.glac_wide_refreeze
 
         self.glac_wide_volume_change_ignored_annual = vol_change_annual_dif
+
+    def finalize_proglacial_lake_fractional(self, density_ice=None, density_water=None):
+        """Post-process lake area/volume from cumulative frontal ablation.
+
+        Converts the bin-discrete lake footprint to a fractional one: each OD bin,
+        ordered strictly terminus-first, is filled in proportion to how much of its
+        initial ice volume has been consumed by cumulative frontal ablation since
+        simulation start.
+
+        Must be called after glac_wide_frontalablation has been populated for all
+        steps (i.e. after the dynamics model's run_until_and_store and the
+        subsequent frontal ablation wiring in run_simulation.py).
+
+        Parameters
+        ----------
+        density_ice : float
+            kg m-3. Required because glac_wide_frontalablation is in m3 w.e.
+        density_water : float
+            kg m-3.
+        """
+        if (self.lake_od_bin_indices is None
+                or len(self.lake_od_bin_indices) == 0
+                or self.lake_od_bin_volumes_init is None):
+            return
+
+        if density_ice is None or density_water is None:
+            raise ValueError(
+                'finalize_proglacial_lake_fractional requires density_ice and density_water'
+            )
+
+        # Order bins strictly terminus-first: larger flowline indices are
+        # downstream (closer to terminus), so sort descending.
+        order = np.argsort(-self.lake_od_bin_indices)
+        vol_init_ordered  = self.lake_od_bin_volumes_init[order]
+        area_init_ordered = self.lake_od_bin_areas[order]
+        bed_h_ordered     = self.lake_od_bin_bed_h[order]
+
+        # Depth per bin at fixed water level, clamped non-negative
+        depth_ordered = np.maximum(self.lake_water_level - bed_h_ordered, 0.0)
+
+        # Cumulative ice volume capacity before each bin (terminus-first)
+        cum_capacity_before = np.concatenate(([0.0], np.cumsum(vol_init_ordered)[:-1]))
+
+        # Convert frontal ablation (m3 w.e. per step) to cumulative m3 ice
+        fa_ice_per_step = self.glac_wide_frontalablation * density_water / density_ice
+        fa_cum_per_step = np.cumsum(fa_ice_per_step)
+
+        for year_idx in range(self.nyears + 1):
+            if year_idx == 0:
+                fa_cum = 0.0
+            else:
+                year = self.years[year_idx - 1]
+                _, tstop = self.get_step_inds(year)
+                fa_cum = float(fa_cum_per_step[tstop])
+
+            remaining_per_bin = np.maximum(fa_cum - cum_capacity_before, 0.0)
+            frac = np.where(
+                vol_init_ordered > 0,
+                np.minimum(
+                    remaining_per_bin / np.where(vol_init_ordered > 0, vol_init_ordered, 1.0),
+                    1.0,
+                ),
+                0.0,
+            )
+            self.glac_wide_proglacial_lake_area_annual[year_idx]   = (frac * area_init_ordered).sum()
+            self.glac_wide_proglacial_lake_volume_annual[year_idx] = (frac * area_init_ordered * depth_ordered).sum()
 
     # ===== SURFACE TYPE FUNCTIONS =====
     def _surfacetypebinsinitial(self, elev_bins):

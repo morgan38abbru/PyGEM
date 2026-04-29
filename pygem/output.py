@@ -554,6 +554,31 @@ class glacierwide_stats(single_glacier):
                 'temporal_resolution': 'annual',
                 'comment': 'glacier mass change ignored due to flux divergence',
             }
+            # AFTER
+            self.output_coords_dict['glac_proglacial_lake_area_annual'] = collections.OrderedDict(
+                [('glac', self.glac_values), ('year', self.year_values)]
+            )
+            self.output_attrs_dict['glac_proglacial_lake_area_annual'] = {
+                'long_name': 'proglacial lake area',
+                'units': 'm2',
+                'temporal_resolution': 'annual',
+                'comment': (
+                    'estimated proglacial lake area derived from cumulative calving volume; '
+                    'area scaled proportionally to total calved area at run end'
+                ),
+            }
+            self.output_coords_dict['glac_proglacial_lake_volume_annual'] = collections.OrderedDict(
+                [('glac', self.glac_values), ('year', self.year_values)]
+            )
+            self.output_attrs_dict['glac_proglacial_lake_volume_annual'] = {
+                'long_name': 'proglacial lake volume',
+                'units': 'm3',
+                'temporal_resolution': 'annual',
+                'comment': (
+                    'estimated proglacial lake volume; lake_area * depth where '
+                    'depth = 0.621 * lake_area^0.36 (empirical area-depth scaling)'
+                ),
+            }
             self.output_coords_dict['offglac_prec'] = collections.OrderedDict(
                 [('glac', self.glac_values), ('time', self.time_values)]
             )
@@ -677,6 +702,22 @@ class glacierwide_stats(single_glacier):
                     'units': 'kg',
                     'temporal_resolution': 'annual',
                     'comment': 'glacier mass change ignored due to flux divergence',
+                }
+                self.output_coords_dict['glac_proglacial_lake_area_annual_mad'] = collections.OrderedDict(
+                    [('glac', self.glac_values), ('year', self.year_values)]
+                )
+                self.output_attrs_dict['glac_proglacial_lake_area_annual_mad'] = {
+                    'long_name': 'proglacial lake area median absolute deviation',
+                    'units': 'm2',
+                    'temporal_resolution': 'annual',
+                }
+                self.output_coords_dict['glac_proglacial_lake_volume_annual_mad'] = collections.OrderedDict(
+                    [('glac', self.glac_values), ('year', self.year_values)]
+                )
+                self.output_attrs_dict['glac_proglacial_lake_volume_annual_mad'] = {
+                    'long_name': 'proglacial lake volume median absolute deviation',
+                    'units': 'm3',
+                    'temporal_resolution': 'annual',
                 }
                 self.output_coords_dict['offglac_prec_mad'] = collections.OrderedDict(
                     [('glac', self.glac_values), ('time', self.time_values)]

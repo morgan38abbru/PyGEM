@@ -1093,9 +1093,26 @@ def run(list_packed_vars):
                                         f'Lake formation potential detected: '
                                         f'moraine={lake_formation_info["moraine_elevation"]:.1f} m, '
                                         f'water_level={lake_formation_info["lake_water_level"]:.1f} m, '
-                                        f'{len(lake_formation_info["overdeepened_bins"])} OD bins'
+                                        f'{len(lake_formation_info["overdeepened_bins"])} OD bins, '
+                                        f'area={lake_formation_info["overdeepened_area_km2"]:.4f} km2'
                                     )
-                            
+
+                                # --- Minimum basin area gate ---
+                                # If the overdeepened area up to the water level is smaller than
+                                # the prescribed minimum, treat the glacier as land-terminating.
+                                if lake_formation_info is not None:
+                                    min_lake_area_km2 = pygem_prms['setup'].get(
+                                        'lake_formation_min_area_km2', 0.01
+                                    )
+                                    if lake_formation_info['overdeepened_area_km2'] < min_lake_area_km2:
+                                        if debug:
+                                            print(
+                                                f'Lake formation suppressed: overdeepening area '
+                                                f'({lake_formation_info["overdeepened_area_km2"]:.4f} km2) '
+                                                f'< minimum ({min_lake_area_km2:.4f} km2)'
+                                            )
+                                        lake_formation_info = None
+
                             if lake_formation_info is not None:
                                 od_bins = lake_formation_info['overdeepened_bins']
                                 wl_trigger = lake_formation_info['lake_water_level']

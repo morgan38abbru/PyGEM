@@ -215,6 +215,11 @@ def detect_lake_formation_potential(fls, threshold_depth=20.0):
     The overdeepened zone is all contiguous bins upstream of the terminus
     whose bed elevation is below the moraine.
 
+    The returned dict now includes 'overdeepened_area_km2': the total
+    planimetric area (km²) of all overdeepened bins whose bed elevation is
+    below the prescribed water level (moraine_elev - threshold_depth).
+    Use this to gate lake formation on a minimum basin size.
+
     Parameters
     ----------
     fls : list of oggm.Flowline
@@ -226,7 +231,8 @@ def detect_lake_formation_potential(fls, threshold_depth=20.0):
     dict or None
         {'moraine_elevation': float,
          'lake_water_level': float,
-         'overdeepened_bins': np.ndarray of int}
+         'overdeepened_bins': np.ndarray of int,
+         'overdeepened_area_km2': float}
         Returns None if no overdeepening is found.
     """
     fl = fls[0]
@@ -254,8 +260,22 @@ def detect_lake_formation_potential(fls, threshold_depth=20.0):
     if len(overdeepened_bins) == 0:
         return None
 
+    water_level = moraine_elev - threshold_depth
+
+    # Planimetric area of overdeepened bins whose bed is below the water level.
+    # These are the bins that will actually be inundated; bins between the water
+    # level and the moraine crest are above water and not counted.
+    submerged_bins = overdeepened_bins[bed[overdeepened_bins] < water_level]
+    if len(submerged_bins) > 0:
+        overdeepened_area_m2 = float(
+            np.sum(fl.widths_m[submerged_bins] * fl.dx_meter)
+        )
+    else:
+        overdeepened_area_m2 = 0.0
+
     return {
         'moraine_elevation': float(moraine_elev),
-        'lake_water_level': float(moraine_elev - threshold_depth),
+        'lake_water_level': float(water_level),
         'overdeepened_bins': overdeepened_bins,
+        'overdeepened_area_km2': overdeepened_area_m2 / 1e6,
     }

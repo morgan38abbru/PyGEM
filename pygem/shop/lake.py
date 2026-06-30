@@ -165,7 +165,8 @@ def supra_lake_binned(gdir, fl_str='inversion_flowlines', filesuffix=''):
 
 def load_lake_calving_data(pygem_prms, rgiid):
     """
-    Check whether an RGI glacier has a calibrated proglacial lake entry.
+    Check whether an RGI glacier has an entry in the lake calibration CSV, and
+    classify it by status.
 
     Parameters
     ----------
@@ -177,8 +178,17 @@ def load_lake_calving_data(pygem_prms, rgiid):
     Returns
     -------
     dict or None
-        If found: {'calving_k': float, 'water_level': float, 'moraine_elev': float or None}
-        Returns None if no lake entry exists or calving_k is NaN.
+        Returns None if the glacier has no row in the CSV at all (i.e., it was
+        never assessed -- falls through to the future-detection scheme).
+
+        If found, returns:
+        {'status': str,                      # 'existing_growing' | 'existing_nongrowing'
+         'calving_k': float or None,          # None for existing_nongrowing
+         'water_level': float or None,
+         'moraine_elev': float or None}
+
+        Note: 'existing_nongrowing' rows are expected to have calving_k as NaN;
+        this is intentional (no calving applied) rather than an error condition.
     """
     import pandas as pd
 
@@ -195,12 +205,27 @@ def load_lake_calving_data(pygem_prms, rgiid):
         return None
 
     row = lake_fa_df.loc[lake_fa_df['RGIId'] == rgiid].iloc[0]
+
+    status = str(row['status']).strip() if 'status' in row and not pd.isna(row['status']) else None
+
+    if status == 'existing_nongrowing':
+        return {
+            'status': 'existing_nongrowing',
+            'calving_k': None,
+            'water_level': float(row['water_level']) if not pd.isna(row['water_level']) else None,
+            'moraine_elev': float(row['moraine_elev']) if 'moraine_elev' in row and not pd.isna(row['moraine_elev']) else None,
+        }
+
+    # status == 'existing_growing' (or missing/legacy rows without a status column)
     if pd.isna(row['calving_k']):
+        # Row exists but has no calving_k and isn't explicitly marked nongrowing --
+        # treat as not-yet-calibrated rather than silently defaulting to land-terminating.
         return None
 
     moraine_elev = float(row['moraine_elev']) if 'moraine_elev' in row and not pd.isna(row['moraine_elev']) else None
 
     return {
+        'status': 'existing_growing',
         'calving_k': float(row['calving_k']),
         'water_level': float(row['water_level']),
         'moraine_elev': moraine_elev,

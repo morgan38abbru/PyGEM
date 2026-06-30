@@ -341,6 +341,17 @@ class glacierwide_stats(single_glacier):
         """
         super().__post_init__()
         self._set_outdir()
+
+        # mc_sim_values has length 1 unless enable_lake_formation is set, in which
+        # case it's lake_formation_mc_nsims. Declared at this max size for every
+        # glacier; only glaciers that actually fork (lake_formed=True at simulation
+        # time) get more than mc_sim=0 populated -- see run_simulation.py export block.
+        self.lake_formation_mc = pygem_prms['setup'].get('enable_lake_formation', False)
+        self.mc_sim_values = (
+            np.arange(pygem_prms['setup'].get('lake_formation_mc_nsims', 50))
+            if self.lake_formation_mc else np.arange(1)
+        )
+
         self._update_dicts()
 
     def _set_outdir(self):
@@ -755,6 +766,64 @@ class glacierwide_stats(single_glacier):
                     'comment': 'snow remaining accounting for new accumulation, melt, and refreeze',
                 }
 
+        # Monte Carlo dimension for future lake-formation calving_k sampling.
+        # mc_sim=0 is always the canonical/median draw -- safe for any code that
+        # does .isel(mc_sim=0) unconditionally, whether or not this glacier forked.
+        if self.lake_formation_mc:
+            self.output_coords_dict['calving_k_mc'] = collections.OrderedDict(
+                [('glac', self.glac_values), ('mc_sim', self.mc_sim_values)]
+            )
+            self.output_attrs_dict['calving_k_mc'] = {
+                'long_name': 'calving_k used for each Monte Carlo simulation layer',
+                'units': '-',
+                'comment': (
+                    'mc_sim=0 is the draw closest to the median of the sampled lognormal '
+                    'distribution and matches the calving_k used for every other output '
+                    'variable in this file. NaN for glaciers not run through the lake-'
+                    'formation Monte Carlo branch.'
+                ),
+            }
+
+            for vn in ['glac_area_annual', 'glac_mass_annual']:
+                self.output_coords_dict[vn] = collections.OrderedDict(
+                    [('glac', self.glac_values), ('mc_sim', self.mc_sim_values), ('year', self.year_values)]
+                )
+
+            for vn, long_name, units, comment in [
+                ('glac_proglacial_lake_area_annual', 'proglacial lake area', 'm2',
+                 'estimated proglacial lake area; per MC draw when mc_sim length > 1'),
+                ('glac_proglacial_lake_volume_annual', 'proglacial lake volume', 'm3',
+                 'estimated proglacial lake volume; per MC draw when mc_sim length > 1'),
+            ]:
+                self.output_coords_dict[vn] = collections.OrderedDict(
+                    [('glac', self.glac_values), ('mc_sim', self.mc_sim_values), ('year', self.year_values)]
+                )
+                self.output_attrs_dict[vn] = {
+                    'long_name': long_name, 'units': units,
+                    'temporal_resolution': 'annual', 'comment': comment,
+                }
+
+            for base_vn, dimname, dimvals in [
+                ('glac_runoff', 'time', self.time_values),
+                ('glac_melt', 'time', self.time_values),
+                ('glac_massbaltotal', 'time', self.time_values),
+                ('glac_snowline', 'time', self.time_values),
+                ('glac_mass_change_ignored_annual', 'year', self.year_values),
+            ]:
+                for suffix, pctl_label in [('p2p5', '2.5th'), ('p50', '50th'), ('p97p5', '97.5th')]:
+                    vn = f'{base_vn}_{suffix}'
+                    self.output_coords_dict[vn] = collections.OrderedDict(
+                        [('glac', self.glac_values), (dimname, dimvals)]
+                    )
+                    self.output_attrs_dict[vn] = {
+                        'long_name': f'{base_vn}, {pctl_label} percentile across Monte Carlo draws',
+                        'units': self.output_attrs_dict.get(base_vn, {}).get('units', '-'),
+                        'temporal_resolution': self.timestep if dimname == 'time' else 'annual',
+                        'comment': (
+                            f'{pctl_label} percentile of {base_vn} across all lake-formation MC draws. '
+                            'Only meaningful for glaciers run through the MC branch.'
+                        ),
+                    }
 
 @dataclass
 class binned_stats(single_glacier):

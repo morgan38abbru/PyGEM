@@ -1160,58 +1160,105 @@ def run(list_packed_vars):
                                         lake_start_year, fl_diag_path=True
                                     )
 
-                                    # --- Phase 2: lake run from year of formation ---
-                                    calving_k_new = pygem_prms['setup'].get(
-                                        'lake_formation_calving_k', 0.3
-                                    )
-                                    cfg.PARAMS['calving_k'] = calving_k_new
-                                    cfg.PARAMS['use_kcalving_for_run'] = True
+                                    # --- Cache fork-point geometry (shared across all MC draws) ---
+                                    _fork_fls = copy.deepcopy(ev_model_land.fls)
 
-                                    _fl_at_formation = ev_model_land.fls[0]
-                                    _ga_at_formation = (
-                                        _fl_at_formation.widths_m * _fl_at_formation.dx_meter
-                                    ).copy()
-                                    _bed = _fl_at_formation.bed_h
+                                    # --- Phase 2: lake run from year of formation, forked N times ---
+                                    lake_mc_nsims = pygem_prms['setup'].get('lake_formation_mc_nsims', 50)
+                                    lognorm_shape = pygem_prms['setup'].get('lake_formation_calving_k_lognorm_shape')
+                                    lognorm_scale = pygem_prms['setup'].get('lake_formation_calving_k_lognorm_scale')
+                                    lognorm_loc = pygem_prms['setup'].get('lake_formation_calving_k_lognorm_loc', 0.0)
+                                    k_min = pygem_prms['setup'].get('lake_formation_calving_k_min', 0.01)
+                                    k_max = pygem_prms['setup'].get('lake_formation_calving_k_max', 5.0)
+
+                                    if lognorm_shape is not None and lognorm_scale is not None:
+                                        from scipy import stats as _stats
+                                        _rng = np.random.default_rng(
+                                            pygem_prms['setup'].get('lake_formation_mc_seed', None)
+                                        )
+                                        lake_calving_k_values = np.clip(
+                                            _stats.lognorm.rvs(
+                                                lognorm_shape, loc=lognorm_loc, scale=lognorm_scale,
+                                                size=lake_mc_nsims, random_state=_rng,
+                                            ),
+                                            k_min, k_max,
+                                        )
+                                    else:
+                                        lake_calving_k_values = np.full(
+                                            lake_mc_nsims,
+                                            pygem_prms['setup'].get('lake_formation_calving_k', 0.3),
+                                        )
+
+                                    _bed = _fork_fls[0].bed_h
+                                    _ga0 = (_fork_fls[0].widths_m * _fork_fls[0].dx_meter).copy()
+                                    _thick0 = _fork_fls[0].thick
                                     _wl = lake_formation_info['lake_water_level']
                                     _od_bins = lake_formation_info['overdeepened_bins']
-                                    # Keep only OD bins with bed below water level and ice present
                                     _valid_od_bins = np.array([
                                         b for b in _od_bins
                                         if b < len(_bed)
                                         and _bed[b] < _wl
-                                        and _ga_at_formation[b] > 0
+                                        and _ga0[b] > 0
                                     ], dtype=int)
 
-                                    mbmod.lake_od_bin_indices     = _valid_od_bins
-                                    mbmod.lake_od_bin_areas       = _ga_at_formation[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
-                                    mbmod.lake_od_bin_bed_h       = _bed[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
-                                    _thick_at_formation           = _fl_at_formation.thick
-                                    mbmod.lake_od_bin_volumes_init = (_ga_at_formation[_valid_od_bins] * _thick_at_formation[_valid_od_bins]).copy() if len(_valid_od_bins) > 0 else np.array([])
-                                    mbmod.lake_water_level        = _wl
+                                    lake_mc_results = []
 
-                                    ev_model_lake = NewLakeSemiImplicitModel(
-                                        copy.deepcopy(ev_model_land.fls),
-                                        y0=lake_start_year,
-                                        mb_model=mbmod,
-                                        glen_a=glen_a,
-                                        fs=fs,
-                                        is_tidewater=True,
-                                        water_level=lake_formation_info['lake_water_level'],
-                                        moraine_elev=lake_formation_info['moraine_elevation'],
-                                        initial_seed_bin=seed_bin,
-                                    )
-                                    diag_lake, ds_lake = ev_model_lake.run_until_and_store(
-                                        args.sim_endyear + 1, fl_diag_path=True
-                                    )
+                                    for _mc_i in range(lake_mc_nsims):
+                                        calving_k_new = lake_calving_k_values[_mc_i]
+                                        cfg.PARAMS['calving_k'] = calving_k_new
+                                        cfg.PARAMS['use_kcalving_for_run'] = True
 
-                                    # Drop duplicate boundary timestep and concatenate
-                                    diag_lake = diag_lake.isel(time=slice(1, None))
-                                    ds_lake_fl = ds_lake[0].isel(time=slice(1, None))
-                                    diag = xr.concat([diag_land, diag_lake], dim='time')
-                                    ds = [xr.concat([ds_land[0], ds_lake_fl], dim='time')]
-                                    ev_model = ev_model_lake
-                                    ev_model.mb_model.glac_wide_volume_annual[-1] = diag.volume_m3.values[-1]
-                                    ev_model.mb_model.glac_wide_area_annual[-1] = diag.area_m2.values[-1]
+                                        mbmod_mc = PyGEMMassBalance(
+                                            gdir, modelprms, glacier_rgi_table,
+                                            fls=_fork_fls, option_areaconstant=False,
+                                        )
+                                        mbmod_mc.lake_od_bin_indices = _valid_od_bins
+                                        mbmod_mc.lake_od_bin_areas = _ga0[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
+                                        mbmod_mc.lake_od_bin_bed_h = _bed[_valid_od_bins].copy() if len(_valid_od_bins) > 0 else np.array([])
+                                        mbmod_mc.lake_od_bin_volumes_init = (
+                                            (_ga0[_valid_od_bins] * _thick0[_valid_od_bins]).copy() if len(_valid_od_bins) > 0 else np.array([])
+                                        )
+                                        mbmod_mc.lake_water_level = _wl
+
+                                        ev_model_mc = NewLakeSemiImplicitModel(
+                                            copy.deepcopy(_fork_fls),
+                                            y0=lake_start_year,
+                                            mb_model=mbmod_mc,
+                                            glen_a=glen_a,
+                                            fs=fs,
+                                            is_tidewater=True,
+                                            water_level=_wl,
+                                            moraine_elev=lake_formation_info['moraine_elevation'],
+                                            initial_seed_bin=seed_bin,
+                                        )
+                                        diag_lake_mc, ds_lake_mc = ev_model_mc.run_until_and_store(
+                                            args.sim_endyear + 1, fl_diag_path=True
+                                        )
+
+                                        # Same stitching your existing single-draw code does --
+                                        # drop the duplicate boundary timestep, concatenate Phase 1
+                                        # (shared, land-only) with this draw's Phase 2.
+                                        diag_lake_mc = diag_lake_mc.isel(time=slice(1, None))
+                                        ds_lake_fl_mc = ds_lake_mc[0].isel(time=slice(1, None))
+                                        diag_mc = xr.concat([diag_land, diag_lake_mc], dim='time')
+                                        ds_mc = [xr.concat([ds_land[0], ds_lake_fl_mc], dim='time')]
+                                        mbmod_mc.glac_wide_volume_annual[-1] = diag_mc.volume_m3.values[-1]
+                                        mbmod_mc.glac_wide_area_annual[-1] = diag_mc.area_m2.values[-1]
+
+                                        lake_mc_results.append({
+                                            'calving_k': float(calving_k_new),
+                                            'mbmod': mbmod_mc,
+                                            'diag': diag_mc,
+                                        })
+
+                                    # Canonical run = draw closest to the sampled median.
+                                    # Everything downstream that previously read mbmod/diag/ds
+                                    # from the single Phase-2 run now reads from this draw.
+                                    _median_k = np.median(lake_calving_k_values)
+                                    _median_idx = int(np.argmin(np.abs(lake_calving_k_values - _median_k)))
+                                    mbmod = lake_mc_results[_median_idx]['mbmod']
+                                    diag = lake_mc_results[_median_idx]['diag']
+                                    ev_model = ev_model_mc  # last-constructed model object; only used if downstream code inspects ev_model directly rather than diag/mbmods
 
                             if not lake_formed:
                                 ev_model = SemiImplicitModel(
@@ -1762,6 +1809,56 @@ def run(list_packed_vars):
                         output_ds_all_stats['offglac_melt'].values[0, :] = output_offglac_melt_steps_stats[:, 0]
                         output_ds_all_stats['offglac_refreeze'].values[0, :] = output_offglac_refreeze_steps_stats[:, 0]
                         output_ds_all_stats['offglac_snowpack'].values[0, :] = output_offglac_snowpack_steps_stats[:, 0]
+
+                    # ----- NEW: Monte Carlo lake-formation layers, if this glacier forked -----
+                    if lake_formed and len(lake_mc_results) > 0:
+                        n_mc = len(lake_mc_results)
+                        mc_k = np.array([r['calving_k'] for r in lake_mc_results])
+                        _med_k = np.median(mc_k)
+                        _med_idx = int(np.argmin(np.abs(mc_k - _med_k)))
+
+                        # reorder so index 0 is the median draw, matching calving_k_mc's docstring
+                        _order = [_med_idx] + [i for i in range(n_mc) if i != _med_idx]
+                        mc_k_ord = mc_k[_order]
+                        mc_area = np.stack([lake_mc_results[i]['diag'].area_m2.values for i in _order])
+                        mc_mass = np.stack([
+                            lake_mc_results[i]['diag'].volume_m3.values * pygem_prms['constants']['density_ice']
+                            for i in _order
+                        ])
+                        mc_lake_area = np.stack([
+                            lake_mc_results[i]['mbmod'].glac_wide_proglacial_lake_area_annual for i in _order
+                        ])
+                        mc_lake_vol = np.stack([
+                            lake_mc_results[i]['mbmod'].glac_wide_proglacial_lake_volume_annual for i in _order
+                        ])
+
+                        output_ds_all_stats['calving_k_mc'].values[0, :n_mc] = mc_k_ord
+                        output_ds_all_stats['glac_area_annual'].values[0, :n_mc, :] = mc_area
+                        output_ds_all_stats['glac_mass_annual'].values[0, :n_mc, :] = mc_mass
+                        output_ds_all_stats['glac_proglacial_lake_area_annual'].values[0, :n_mc, :] = mc_lake_area
+                        output_ds_all_stats['glac_proglacial_lake_volume_annual'].values[0, :n_mc, :] = mc_lake_vol
+
+                        if args.export_extra_vars:
+                            for base_vn, getter in [
+                                ('glac_runoff', lambda r: r['mbmod'].glac_wide_runoff),
+                                ('glac_melt', lambda r: r['mbmod'].glac_wide_melt),
+                                ('glac_massbaltotal', lambda r: r['mbmod'].glac_wide_massbaltotal),
+                                ('glac_snowline', lambda r: r['mbmod'].glac_wide_snowline),
+                            ]:
+                                stacked = np.stack([getter(r) for r in lake_mc_results])
+                                p2p5, p50, p97p5 = np.nanpercentile(stacked, [2.5, 50, 97.5], axis=0)
+                                output_ds_all_stats[f'{base_vn}_p2p5'].values[0, :] = p2p5
+                                output_ds_all_stats[f'{base_vn}_p50'].values[0, :] = p50
+                                output_ds_all_stats[f'{base_vn}_p97p5'].values[0, :] = p97p5
+
+                            mc_ignored = np.stack([
+                                r['mbmod'].glac_wide_volume_change_ignored_annual * pygem_prms['constants']['density_ice']
+                                for r in lake_mc_results
+                            ])
+                            p2p5, p50, p97p5 = np.nanpercentile(mc_ignored, [2.5, 50, 97.5], axis=0)
+                            output_ds_all_stats['glac_mass_change_ignored_annual_p2p5'].values[0, :-1] = p2p5
+                            output_ds_all_stats['glac_mass_change_ignored_annual_p50'].values[0, :-1] = p50
+                            output_ds_all_stats['glac_mass_change_ignored_annual_p97p5'].values[0, :-1] = p97p5
 
                     # output median absolute deviation
                     if nsims > 1:

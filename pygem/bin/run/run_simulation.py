@@ -1058,6 +1058,7 @@ def run(list_packed_vars):
                             )
                         # SemiImplicitModel does now include frontal ablation, so this is what is used for lake terminating glaciers 
                         elif is_lake_glacier:
+                            lake_formed = False
                             cfg.PARAMS['use_kcalving_for_run'] = True
                             ev_model = LakeSemiImplicitModel(
                                 nfls,
@@ -1245,10 +1246,34 @@ def run(list_packed_vars):
                                         mbmod_mc.glac_wide_volume_annual[-1] = diag_mc.volume_m3.values[-1]
                                         mbmod_mc.glac_wide_area_annual[-1] = diag_mc.area_m2.values[-1]
 
+                                        # Compute this draw's per-step frontal ablation from its own
+                                        # diag_mc.calving_m3 BEFORE finalize_proglacial_lake_fractional,
+                                        # since that function requires glac_wide_frontalablation to
+                                        # already be populated for all steps (per its own docstring).
+                                        # Mirrors the post-fork block (lines ~1280-1302) but applied
+                                        # per-draw instead of once on whichever object survives the loop.
+                                        _calving_m3_annual_mc = (
+                                            (diag_mc.calving_m3.values[1:] - diag_mc.calving_m3.values[0:-1])
+                                            * pygem_prms['constants']['density_ice']
+                                            / pygem_prms['constants']['density_water']
+                                        )
+                                        for _n, _year in enumerate(np.arange(args.sim_startyear, args.sim_endyear + 1)):
+                                            _tstart, _tstop = mbmod_mc.get_step_inds(_year)
+                                            mbmod_mc.glac_wide_frontalablation[_tstop] = _calving_m3_annual_mc[_n]
+                                        mbmod_mc.glac_wide_massbaltotal = (
+                                            mbmod_mc.glac_wide_massbaltotal - mbmod_mc.glac_wide_frontalablation
+                                        )
+                                        mbmod_mc.finalize_proglacial_lake_fractional(
+                                            density_ice=pygem_prms['constants']['density_ice'],
+                                            density_water=pygem_prms['constants']['density_water'],
+                                        )
+
                                         lake_mc_results.append({
                                             'calving_k': float(calving_k_new),
                                             'mbmod': mbmod_mc,
                                             'diag': diag_mc,
+                                            'ds': ds_mc,
+                                            'ev_model': ev_model_mc,
                                         })
 
                                     # Canonical run = draw closest to the sampled median.
@@ -1258,7 +1283,8 @@ def run(list_packed_vars):
                                     _median_idx = int(np.argmin(np.abs(lake_calving_k_values - _median_k)))
                                     mbmod = lake_mc_results[_median_idx]['mbmod']
                                     diag = lake_mc_results[_median_idx]['diag']
-                                    ev_model = ev_model_mc  # last-constructed model object; only used if downstream code inspects ev_model directly rather than diag/mbmods
+                                    ds = lake_mc_results[_median_idx]['ds']
+                                    ev_model = lake_mc_results[_median_idx]['ev_model']
 
                             if not lake_formed:
                                 ev_model = SemiImplicitModel(
@@ -1846,19 +1872,19 @@ def run(list_packed_vars):
                                 ('glac_snowline', lambda r: r['mbmod'].glac_wide_snowline),
                             ]:
                                 stacked = np.stack([getter(r) for r in lake_mc_results])
-                                p2p5, p50, p97p5 = np.nanpercentile(stacked, [2.5, 50, 97.5], axis=0)
-                                output_ds_all_stats[f'{base_vn}_p2p5'].values[0, :] = p2p5
+                                p25, p50, p75 = np.nanpercentile(stacked, [25, 50, 75], axis=0)
+                                output_ds_all_stats[f'{base_vn}_p25'].values[0, :] = p25
                                 output_ds_all_stats[f'{base_vn}_p50'].values[0, :] = p50
-                                output_ds_all_stats[f'{base_vn}_p97p5'].values[0, :] = p97p5
+                                output_ds_all_stats[f'{base_vn}_p75'].values[0, :] = p75
 
                             mc_ignored = np.stack([
                                 r['mbmod'].glac_wide_volume_change_ignored_annual * pygem_prms['constants']['density_ice']
                                 for r in lake_mc_results
                             ])
-                            p2p5, p50, p97p5 = np.nanpercentile(mc_ignored, [2.5, 50, 97.5], axis=0)
-                            output_ds_all_stats['glac_mass_change_ignored_annual_p2p5'].values[0, :-1] = p2p5
+                            p25, p50, p75 = np.nanpercentile(mc_ignored, [25, 50, 75], axis=0)
+                            output_ds_all_stats['glac_mass_change_ignored_annual_p25'].values[0, :-1] = p25
                             output_ds_all_stats['glac_mass_change_ignored_annual_p50'].values[0, :-1] = p50
-                            output_ds_all_stats['glac_mass_change_ignored_annual_p97p5'].values[0, :-1] = p97p5
+                            output_ds_all_stats['glac_mass_change_ignored_annual_p75'].values[0, :-1] = p75
 
                     # output median absolute deviation
                     if nsims > 1:

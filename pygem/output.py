@@ -810,7 +810,7 @@ class glacierwide_stats(single_glacier):
                 ('glac_snowline', 'time', self.time_values),
                 ('glac_mass_change_ignored_annual', 'year', self.year_values),
             ]:
-                for suffix, pctl_label in [('p2p5', '2.5th'), ('p50', '50th'), ('p97p5', '97.5th')]:
+                for suffix, pctl_label in [('p25', '25th'), ('p50', '50th'), ('p75', '75th')]:
                     vn = f'{base_vn}_{suffix}'
                     self.output_coords_dict[vn] = collections.OrderedDict(
                         [('glac', self.glac_values), (dimname, dimvals)]

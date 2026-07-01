@@ -231,7 +231,7 @@ def load_lake_calving_data(pygem_prms, rgiid):
         'moraine_elev': moraine_elev,
     }
 
-def detect_lake_formation_potential(fls, threshold_depth=20.0):
+def detect_lake_formation_potential(fls, threshold_depth=20.0, dry_tolerance_bins=2):
     """
     Detect whether a glacier has potential for proglacial lake formation.
 
@@ -274,16 +274,10 @@ def detect_lake_formation_potential(fls, threshold_depth=20.0):
 
     moraine_elev = max(bed[terminus_idx], bed[terminus_idx + 1])
 
-    overdeepened_bins = []
-    for i in range(terminus_idx, -1, -1):
-        if bed[i] < moraine_elev:
-            overdeepened_bins.append(i)
-        else:
-            break
-    overdeepened_bins = np.array(overdeepened_bins)
-
-    if len(overdeepened_bins) == 0:
+    ui = overdeepening_upstream_intersection(fl, moraine_elev, dry_tolerance_bins=dry_tolerance_bins)
+    if ui['upstream_edge_idx'] is None:
         return None
+    overdeepened_bins = np.array(ui['span_bin_indices'], dtype=int)
 
     water_level = moraine_elev - threshold_depth
 
@@ -304,3 +298,78 @@ def detect_lake_formation_potential(fls, threshold_depth=20.0):
         'overdeepened_bins': overdeepened_bins,
         'overdeepened_area_km2': overdeepened_area_m2 / 1e6,
     }
+
+def overdeepening_upstream_intersection(fl, water_level, dry_tolerance_bins=2):
+    """
+    Two-phase upstream walk to find the extent of an overdeepened basin.
+
+    Phase A: walk upstream from the terminus (last bin with thick > 1.0) to
+    find the first WET bin (bed_h < water_level) -- the entry point. Handles
+    the case where the terminus itself sits above water_level (e.g. a
+    calibrated/data-driven water level on a glacier that has since retreated,
+    or a terminus bin whose bed happens to sit at/above its own local moraine).
+    Phase B: continue upstream through the wet region, tolerating brief dry
+    interruptions (up to dry_tolerance_bins consecutive dry bins) rather than
+    stopping at the first one, only halting at a sustained dry run -- the
+    true upstream boundary of the basin.
+
+    Ported from the calibration_suitability_and_calving_k notebook used to
+    produce calibrated_calving_k.csv, so that the basin extent PyGEM resolves
+    at simulation time is consistent with what the calibration assumed.
+
+    Parameters
+    ----------
+    fl : oggm.Flowline
+    water_level : float
+        Threshold elevation [m a.s.l.] -- either a calibrated water level or
+        a moraine elevation, depending on the caller.
+    dry_tolerance_bins : int
+        Consecutive dry bins the walk can bridge over before stopping.
+
+    Returns
+    -------
+    dict
+        {'terminus_idx': int or None,
+         'upstream_edge_idx': int or None (None = no overdeepening found),
+         'span_bin_indices': list of int, terminus-first (may include
+             dry-tolerated bins -- callers needing only submerged bins
+             should filter with bed_h < water_level),
+         'n_dry_bins_in_span': int or None}
+    """
+    bed = fl.bed_h
+    thick = fl.thick
+    ice_bins = np.where(thick > 1.0)[0]
+    if len(ice_bins) == 0:
+        return {'terminus_idx': None, 'upstream_edge_idx': None,
+                'span_bin_indices': [], 'n_dry_bins_in_span': None}
+
+    t = int(ice_bins[-1])
+
+    entry_idx = None
+    for i in range(t, -1, -1):
+        if bed[i] < water_level:
+            entry_idx = i
+            break
+
+    if entry_idx is None:
+        return {'terminus_idx': t, 'upstream_edge_idx': None,
+                'span_bin_indices': [], 'n_dry_bins_in_span': None}
+
+    upstream_edge = entry_idx
+    i = entry_idx - 1
+    pending_dry = []
+    while i >= 0:
+        if bed[i] < water_level:
+            upstream_edge = i
+            pending_dry = []
+        else:
+            pending_dry.append(i)
+            if len(pending_dry) > dry_tolerance_bins:
+                break
+        i -= 1
+
+    span = list(range(t, upstream_edge - 1, -1))
+    n_dry = int(np.sum(bed[span] >= water_level))
+
+    return {'terminus_idx': t, 'upstream_edge_idx': upstream_edge,
+            'span_bin_indices': span, 'n_dry_bins_in_span': n_dry}

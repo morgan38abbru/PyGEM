@@ -707,17 +707,23 @@ def run(list_packed_vars):
 
                     # Calving parameter
                     # --- Check for calibrated proglacial lake ---
-                    is_lake_glacier = False
+                    is_lake_glacier = False   # True only for actively-calving existing_growing lakes
+                    is_known_lake = False     # True for ANY row in lake_fa_calibration.csv (growing OR nongrowing)
                     lake_info = None
                     if pygem_prms['setup'].get('include_laketerm', False):
                         lake_info = lake.load_lake_calving_data(pygem_prms, rgiid)
                         if lake_info is not None:
-                            is_lake_glacier = True
-                            calving_k = lake_info['calving_k']
-                            calving_k_values = np.array([calving_k] * nsims)
-                            if debug:
-                                print(f'Lake glacier detected: calving_k={calving_k}, '
-                                      f'water_level={lake_info["water_level"]}')
+                            is_known_lake = True
+                            if lake_info['status'] == 'existing_growing':
+                                is_lake_glacier = True
+                                calving_k = lake_info['calving_k']
+                                calving_k_values = np.array([calving_k] * nsims)
+                                if debug:
+                                    print(f'Lake glacier detected: calving_k={calving_k}, '
+                                          f'water_level={lake_info["water_level"]}')
+                            elif debug:
+                                print(f'{rgiid}: existing_nongrowing -- running without calving, '
+                                      f'skipping new-lake detection.')
 
                     if not is_lake_glacier:
                         if (
@@ -1008,30 +1014,21 @@ def run(list_packed_vars):
                     )
 
                     # Wire OD bin geometry onto mbmod for existing lake glaciers
+                    # Overdeepenings are defined purely by water_level -- no moraine
+                    # fallback needed since calibrated glaciers always carry a real
+                    # water_level. Uses the same dry-tolerant two-phase walk the
+                    # calibration notebook used to resolve water levels, so the basin
+                    # extent PyGEM finds here matches what calibration assumed.
                     if is_lake_glacier:
                         _fl  = nfls[0]
                         _bed = _fl.bed_h
                         _wl  = lake_info['water_level']
-                        _moraine = (
-                            lake_info['moraine_elev']
-                            if lake_info['moraine_elev'] is not None
-                            else _wl + 20.0
-                        )
-                        _terminus_bins = np.where(_fl.thick > 1.0)[0]
-                        if len(_terminus_bins) > 0:
-                            _t = int(_terminus_bins[-1])
-                            _od_bins = []
-                            for _i in range(_t, -1, -1):
-                                if _bed[_i] < _moraine:
-                                    _od_bins.append(_i)
-                                else:
-                                    break
-                            _od_bins = np.array(_od_bins, dtype=int)
-                        else:
-                            _od_bins = np.array([], dtype=int)
-                        _valid = np.array(
-                            [b for b in _od_bins if _bed[b] < _wl], dtype=int
-                        )
+                        _dry_tol = pygem_prms['setup'].get('lake_dry_tolerance_bins', 2)
+                        _ui = lake.overdeepening_upstream_intersection(_fl, _wl, dry_tolerance_bins=_dry_tol)
+                        _span = np.array(_ui['span_bin_indices'], dtype=int)
+                        # span can include dry-tolerated bins; area/volume accounting
+                        # should only credit bins that can physically hold water
+                        _valid = _span[_bed[_span] < _wl] if len(_span) > 0 else _span
                         mbmod.lake_od_bin_indices    = _valid
                         mbmod.lake_od_bin_areas      = (_fl.widths_m[_valid] * _fl.dx_meter).copy() if len(_valid) > 0 else np.array([])
                         mbmod.lake_od_bin_bed_h      = _bed[_valid].copy() if len(_valid) > 0 else np.array([])
@@ -1082,7 +1079,7 @@ def run(list_packed_vars):
                             lake_formation_info = None
                             lake_formed = False
 
-                            if pygem_prms['setup'].get('enable_lake_formation', False):
+                            if pygem_prms['setup'].get('enable_lake_formation', False) and not is_known_lake:
                                 threshold_depth = pygem_prms['setup'].get(
                                     'lake_formation_threshold_depth', 20.0
                                 )

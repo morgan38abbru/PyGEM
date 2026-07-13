@@ -1171,9 +1171,12 @@ def run(list_packed_vars):
 
                                     if lognorm_shape is not None and lognorm_scale is not None:
                                         from scipy import stats as _stats
-                                        _rng = np.random.default_rng(
-                                            pygem_prms['setup'].get('lake_formation_mc_seed', None)
-                                        )
+                                        _mc_base_seed = pygem_prms['setup'].get('lake_formation_mc_seed', None)
+                                        if _mc_base_seed is not None:
+                                            _glacier_seed_key = int(glacier_str.replace('.', ''))
+                                            _rng = np.random.default_rng([_mc_base_seed, _glacier_seed_key])
+                                        else:
+                                            _rng = np.random.default_rng(None)
                                         lake_calving_k_values = np.clip(
                                             _stats.lognorm.rvs(
                                                 lognorm_shape, loc=lognorm_loc, scale=lognorm_scale,

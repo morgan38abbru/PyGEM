@@ -2088,7 +2088,7 @@ def run(list_packed_vars):
 
         except Exception as err:
             # LOG FAILURE
-            fail_fp = pygem_prms['root'] + '/Output/simulations/failed/' + reg_str + '/' + sim_climate_name + '/'
+            fail_fp = pygem_prms['root'] + '/Output/simulations-morgan/failed/' + reg_str + '/' + sim_climate_name + '/'
             if sim_climate_name not in ['ERA5', 'COAWST']:
                 fail_fp += sim_climate_scenario + '/'
             if not os.path.exists(fail_fp):

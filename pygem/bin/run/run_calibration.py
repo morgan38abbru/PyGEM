@@ -1847,7 +1847,7 @@ def run(list_packed_vars):
                 modelprms['mb_obs_mwea_err'] = [float(mb_obs_mwea_err)]
 
                 modelprms_fn = glacier_str + '-modelprms_dict.json'
-                modelprms_fp = pygem_prms['root'] + '/Output/calibration/' + glacier_str.split('.')[0].zfill(2) + '/'
+                modelprms_fp = pygem_prms['root'] + '/Output/calibration-morgan/' + glacier_str.split('.')[0].zfill(2) + '/'
                 if not os.path.exists(modelprms_fp):
                     os.makedirs(modelprms_fp, exist_ok=True)
                 modelprms_fullfn = modelprms_fp + modelprms_fn
@@ -2028,7 +2028,7 @@ def run(list_packed_vars):
             if pygem_prms['calib']['priors_reg_fn'] is not None:
                 # Load priors
                 priors_df = pd.read_csv(
-                    pygem_prms['root'] + '/Output/calibration/' + pygem_prms['calib']['priors_reg_fn']
+                    pygem_prms['root'] + '/Output/calibration-morgan/' + pygem_prms['calib']['priors_reg_fn']
                 )
                 priors_idx = np.where(
                     (priors_df.O1Region == glacier_rgi_table['O1Region'])
@@ -2162,7 +2162,7 @@ def run(list_packed_vars):
                 modelprms_export['elev_change_1d']['obs'] = [ob.flatten().tolist() for ob in obs['elev_change_1d']]
                 modelprms_export['elev_change_1d']['dates'] = [(dt1, dt2) for dt1, dt2 in gdir.elev_change_1d['dates']]
                 ks += ['rhoabl', 'rhoacc']
-                outsuffix = 'dh'  # output file path suffix to not overwrite files in Output/calibration/
+                outsuffix = 'dh'  # output file path suffix to not overwrite files in Output/calibration-morgan/
             modelprms_export['priors'] = priors
 
             # create nested dictionary for each mcmc key
@@ -2258,7 +2258,7 @@ def run(list_packed_vars):
                             np.round(mb_obs_mwea_err, 3),
                         )
                         # plot chain
-                        fp = pygem_prms['root'] + '/Output/calibration/' + glacier_str.split('.')[0].zfill(2) + '/fig/'
+                        fp = pygem_prms['root'] + '/Output/calibration-morgan/' + glacier_str.split('.')[0].zfill(2) + '/fig/'
                         fp = os.path.normpath(os.path.join(fp, outsuffix))
                         os.makedirs(fp, exist_ok=True)
                         if ncores > 1:
@@ -2322,7 +2322,7 @@ def run(list_packed_vars):
                 # compute stats on mcmc parameters
                 modelprms_export = mcmc_stats(modelprms_export)
 
-                fp = pygem_prms['root'] + '/Output/calibration/' + glacier_str.split('.')[0].zfill(2) + '/'
+                fp = pygem_prms['root'] + '/Output/calibration-morgan/' + glacier_str.split('.')[0].zfill(2) + '/'
                 fp = os.path.normpath(os.path.join(fp, outsuffix))
                 if not os.path.exists(fp):
                     os.makedirs(fp, exist_ok=True)
@@ -2730,7 +2730,7 @@ def run(list_packed_vars):
             modelprms['mb_obs_mwea_err'] = [mb_obs_mwea_err]
 
             modelprms_fn = glacier_str + '-modelprms_dict.json'
-            modelprms_fp = pygem_prms['root'] + '/Output/calibration/' + glacier_str.split('.')[0].zfill(2) + '/'
+            modelprms_fp = pygem_prms['root'] + '/Output/calibration-morgan/' + glacier_str.split('.')[0].zfill(2) + '/'
             if not os.path.exists(modelprms_fp):
                 os.makedirs(modelprms_fp, exist_ok=True)
             modelprms_fullfn = modelprms_fp + modelprms_fn
@@ -3011,7 +3011,7 @@ def run(list_packed_vars):
             modelprms['mb_obs_mwea_err'] = [mb_obs_mwea_err]
 
             modelprms_fn = glacier_str + '-modelprms_dict.json'
-            modelprms_fp = pygem_prms['root'] + '/Output/calibration/' + glacier_str.split('.')[0].zfill(2) + '/'
+            modelprms_fp = pygem_prms['root'] + '/Output/calibration-morgan/' + glacier_str.split('.')[0].zfill(2) + '/'
             if not os.path.exists(modelprms_fp):
                 os.makedirs(modelprms_fp, exist_ok=True)
             modelprms_fullfn = modelprms_fp + modelprms_fn

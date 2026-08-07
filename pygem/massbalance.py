@@ -811,6 +811,9 @@ class PyGEMMassBalance(MassBalanceModel):
             self.glac_bin_area_annual[:, year_idx] = glacier_area_t0
             # Supraglacial lake annual update
             if pygem_prms['mb']['include_supra_lakes']:
+                # Bins that have lost their ice this year can no longer host a
+                # supraglacial lake -- clear their coverage before recording/growing
+                self.supra_lake_coverage[glacier_area_t0 == 0] = 0
                 # Record coverage BEFORE growing so output reflects what was active this year
                 self.glac_bin_supra_lake_annual[:, year_idx] = self.supra_lake_coverage
                 # Grow coverage using slope-dependent annual rates,

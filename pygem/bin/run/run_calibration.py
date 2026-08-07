@@ -49,7 +49,7 @@ import pygem.pygem_modelsetup as modelsetup
 from pygem import class_climate, mcmc
 from pygem.massbalance import PyGEMMassBalance
 from pygem.plot import graphics
-from pygem.shop import debris
+from pygem.shop import debris, lake
 from pygem.utils._funcs import interp1d_fill_gaps
 from pygem.utils.stats import mcmc_stats
 
@@ -824,6 +824,16 @@ def run(list_packed_vars):
         # ===== Load glacier data: area (km2), ice thickness (m), width (km) =====
         try:
             # Note this is where pre-processing of datasets (e.g., mass balance, debris) occurs
+            #
+            # gdir.is_tidewater controls the INVERSION METHOD and DYNAMICS MODEL
+            # (see run_inversion / run_oggm_dynamics: is_tidewater=True triggers
+            # use_kcalving_for_inversion, find_inversion_calving_from_any_mb, and
+            # FluxBasedModel with do_kcalving=True). Registry lake glaciers must
+            # NOT go through any of that here -- their inversion stays land-
+            # terminating; calving_k for them is calibrated separately elsewhere
+            # (run_simulation.py's lake pathway), not by this script. So
+            # is_tidewater is left tied to RGI TermType only, unchanged from
+            # before.
             if glacier_rgi_table['TermType'] not in [1, 5] or not pygem_prms['setup']['include_frontalablation']:
                 gdir = oggm_compat.single_flowline_glacier_directory(glacier_str)
                 gdir.is_tidewater = False
@@ -831,6 +841,22 @@ def run(list_packed_vars):
                 # set reset=True to overwrite non-calving directory that may already exist
                 gdir = oggm_compat.single_flowline_glacier_directory_with_calving(glacier_str)
                 gdir.is_tidewater = True
+
+            # use_lake_mb_clim_target is DECOUPLED from is_tidewater on purpose: it
+            # only affects which MB observation gets read a few lines down (mb_clim_mwea
+            # vs mb_mwea). It does NOT touch inversion method, dynamics model, or the
+            # marine calving_k lookup below (all still gated on is_tidewater alone) --
+            # those must stay land-terminating / calving-free for these glaciers.
+            #
+            # Same lookup run_simulation.py uses to set is_lake_glacier (see its
+            # "Calving parameter" block): only status == 'existing_growing' counts --
+            # existing_nongrowing lakes have no active calving signal to correct for,
+            # so their MB target stays the raw geodetic mb_mwea.
+            use_lake_mb_clim_target = False
+            if pygem_prms['setup'].get('include_laketerm', False):
+                lake_info = lake.load_lake_calving_data(pygem_prms, glacier_rgi_table['RGIId'])
+                if lake_info is not None and lake_info['status'] == 'existing_growing':
+                    use_lake_mb_clim_target = True
 
             fls = gdir.read_pickle('inversion_flowlines')
             glacier_area = fls[0].widths_m * fls[0].dx_meter
@@ -849,14 +875,17 @@ def run(list_packed_vars):
             # ----- Calibration data -----
             gdir.mbdata = gdir.read_json('mb_calib_pygem')
 
-            # Tidewater glaciers - use climatic mass balance since calving_k already calibrated separately
-            if gdir.is_tidewater:
+            # Tidewater glaciers (true marine/lake, or registry-listed lake) - use
+            # climatic mass balance since calving_k is (or will be) calibrated separately
+            if gdir.is_tidewater or use_lake_mb_clim_target:
                 assert 'mb_clim_mwea' in gdir.mbdata.keys(), (
-                    'include_frontalablation is set as true, but fontal ablation has yet to be calibrated.'
+                    f'{glacier_rgi_table["RGIId"]}: use_lake_mb_clim_target=True but '
+                    f'mb_clim_mwea is missing from mb_calib_pygem.json -- run the lake '
+                    f'MB correction step first.'
                 )
                 mb_obs_mwea = gdir.mbdata['mb_clim_mwea']
                 mb_obs_mwea_err = gdir.mbdata['mb_clim_mwea_err']
-            # non-tidewater - use geodetic mass balance
+            # non-tidewater, non-registry - use geodetic mass balance
             else:
                 # Load data
                 mb_obs_mwea = gdir.mbdata['mb_mwea']

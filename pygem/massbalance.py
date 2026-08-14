@@ -16,6 +16,7 @@ from oggm.core.massbalance import MassBalanceModel
 
 from pygem.setup.config import ConfigManager
 from pygem.utils._funcs import annualweightedmean_array
+from pygem.shop import lake
 
 # instantiate ConfigManager
 config_manager = ConfigManager()
@@ -117,23 +118,8 @@ class PyGEMMassBalance(MassBalanceModel):
             except AttributeError:
                 self.supra_lake_coverage = np.zeros(self.glacier_area_initial.shape[0])
             self.supra_lake_melt_factor = pygem_prms['mb']['supra_lake_melt_factor']
-            # Load slope-dependent annual growth rules from CSV
-            # Expected columns: slope_min_deg, slope_max_deg, growth_rate_annual
-            try:
-                import pandas as _pd
-                _growth_fp = (
-                    pygem_prms['root']
-                    + pygem_prms['mb']['supra_lake_relpath']
-                    + pygem_prms['mb']['supra_lake_growth_fn']
-                )
-                _df = _pd.read_csv(_growth_fp)
-                self._lake_growth_rules = list(zip(
-                    _df['slope_min_deg'].values,
-                    _df['slope_max_deg'].values,
-                    _df['growth_rate_annual'].values,
-                ))
-            except Exception:
-                self._lake_growth_rules = []
+            # Load slope-dependent annual growth rules (shared with lake.py)
+            self._lake_growth_rules = lake.load_lake_growth_rules(pygem_prms)
        
         # Climate data
         self.dates_table = gdir.dates_table
@@ -824,43 +810,18 @@ class PyGEMMassBalance(MassBalanceModel):
                     bed_h = fls[fl_id].bed_h
                     thick = fls[fl_id].thick
 
-                    # Build overdeepening mask using same logic as detect_lake_formation_potential
-                    terminus_bins = np.where(thick > 1.0)[0]
-                    if len(terminus_bins) > 0:
-                        terminus_idx = int(terminus_bins[-1])
-                        moraine_elev = max(
-                            bed_h[terminus_idx],
-                            bed_h[terminus_idx + 1] if terminus_idx < len(bed_h) - 1
-                            else bed_h[terminus_idx]
-                        )
-                        overdeepening_mask = np.zeros(len(bed_h), dtype=bool)
-                        for i in range(terminus_idx, -1, -1):
-                            if bed_h[i] < moraine_elev:
-                                overdeepening_mask[i] = True
-                            else:
-                                break
-                    else:
-                        overdeepening_mask = np.zeros(len(bed_h), dtype=bool)
-
-                    # Forward-difference slope; last bin copies second-to-last
-                    ror = np.zeros_like(surf_h)
-                    ror[:-1] = (surf_h[:-1] - surf_h[1:]) / dx_m
-                    ror[-1] = ror[-2]
-                    slopes_deg = np.degrees(np.arctan(np.abs(ror)))
+                    overdeepening_mask = lake.lake_overdeepening_mask(bed_h, thick)
+                    slopes_deg = lake.lake_bin_slopes_deg(surf_h, dx_m)
 
                     for bin_idx in np.where(self.supra_lake_coverage > 0)[0]:
                         if not overdeepening_mask[bin_idx]:
                             continue  # no growth outside the overdeepening
-                        rate = 0.0
-                        for s_min, s_max, r in self._lake_growth_rules:
-                            if s_min <= slopes_deg[bin_idx] < s_max:
-                                rate = r
-                                break
+                        rate = lake.lookup_lake_growth_rate(slopes_deg[bin_idx], self._lake_growth_rules)
                         if rate > 0.0:
                             self.supra_lake_coverage[bin_idx] = min(
                                 self.supra_lake_coverage[bin_idx] * (1.0 + rate), 1.0
                             )
-
+                            
             # Store glacier-wide results
             self._convert_glacwide_results(
                 year_idx,

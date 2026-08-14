@@ -33,6 +33,109 @@ if 'supra_lake' not in cfg.BASENAMES:
     cfg.BASENAMES['supra_lake'] = ('supra_lake.tif', 'Raster of supraglacial lake fractional coverage data')
 
 
+# ---------------------------------------------------------------------------
+# Shared supraglacial-lake growth-rate utilities.
+#
+# Used in two places that must stay consistent:
+#   1. Here, to *backdate* a present-day observed lake-coverage raster to the
+#      simulation start year.
+#   2. In massbalance.py, to *grow* coverage forward year-by-year.
+# ---------------------------------------------------------------------------
+
+def load_lake_growth_rules(pygem_prms):
+    """
+    Load the slope-dependent annual lake growth-rate table.
+    Expected CSV columns: slope_min_deg, slope_max_deg, growth_rate_annual
+    Returns a list of (slope_min_deg, slope_max_deg, growth_rate_annual) tuples,
+    or an empty list if the file can't be found/parsed.
+    """
+    import pandas as pd
+    try:
+        growth_fp = (
+            pygem_prms['root']
+            + pygem_prms['mb']['supra_lake_relpath']
+            + pygem_prms['mb']['supra_lake_growth_fn']
+        )
+        df = pd.read_csv(growth_fp)
+        return list(zip(
+            df['slope_min_deg'].values,
+            df['slope_max_deg'].values,
+            df['growth_rate_annual'].values,
+        ))
+    except Exception:
+        return []
+
+
+def lake_overdeepening_mask(bed_h, thick):
+    """Boolean mask (terminus-relative) of the overdeepening region a lake may grow in."""
+    mask = np.zeros(len(bed_h), dtype=bool)
+    terminus_bins = np.where(thick > 1.0)[0]
+    if len(terminus_bins) == 0:
+        return mask
+    terminus_idx = int(terminus_bins[-1])
+    moraine_elev = max(
+        bed_h[terminus_idx],
+        bed_h[terminus_idx + 1] if terminus_idx < len(bed_h) - 1 else bed_h[terminus_idx],
+    )
+    for i in range(terminus_idx, -1, -1):
+        if bed_h[i] < moraine_elev:
+            mask[i] = True
+        else:
+            break
+    return mask
+
+
+def lake_bin_slopes_deg(surface_h, dx_meter):
+    """Forward-difference surface slope [deg] per bin; last bin copies second-to-last."""
+    ror = np.zeros_like(surface_h, dtype=float)
+    ror[:-1] = (surface_h[:-1] - surface_h[1:]) / dx_meter
+    ror[-1] = ror[-2] if len(ror) > 1 else 0.0
+    return np.degrees(np.arctan(np.abs(ror)))
+
+
+def lookup_lake_growth_rate(slope_deg, growth_rules):
+    """Annual growth rate for a given slope [deg]; 0.0 if no rule matches."""
+    for s_min, s_max, r in growth_rules:
+        if s_min <= slope_deg < s_max:
+            return r
+    return 0.0
+
+
+def backdate_supra_lake_coverage(coverage, bed_h, surface_h, thick, dx_meter, growth_rules, n_years):
+    """
+    Back-project observed present-day coverage to n_years earlier by inverting
+    cov_(t+1) = min(cov_t * (1+rate), 1.0).
+
+    Bins currently at the 1.0 cap are left unchanged -- growth stops once a bin
+    saturates, so how long ago that happened can't be recovered from the data.
+    Bins outside the overdeepening, or whose slope matches no growth rule
+    (rate == 0), are also left unchanged, since the forward model never grows
+    them either.
+
+    Returns (backdated_coverage, n_saturated_bins) for logging/QA.
+    """
+    backdated = coverage.copy()
+    if n_years <= 0 or not growth_rules or not np.any(coverage > 0):
+        return backdated, 0
+
+    mask = lake_overdeepening_mask(bed_h, thick)
+    slopes_deg = lake_bin_slopes_deg(surface_h, dx_meter)
+
+    n_saturated = 0
+    for bin_idx in np.where(coverage > 0)[0]:
+        if not mask[bin_idx]:
+            continue
+        rate = lookup_lake_growth_rate(slopes_deg[bin_idx], growth_rules)
+        if rate <= 0.0:
+            continue
+        if coverage[bin_idx] >= 1.0:
+            n_saturated += 1
+            continue
+        backdated[bin_idx] = coverage[bin_idx] / ((1.0 + rate) ** n_years)
+
+    return np.clip(backdated, 0.0, 1.0), n_saturated
+
+
 @entity_task(log, writes=['supra_lake'])
 def supra_lake_to_gdir(gdir, add_to_gridded=True):
     """Reproject the supraglacial lake fractional coverage file to the given glacier directory.
@@ -154,6 +257,29 @@ def supra_lake_binned(gdir, fl_str='inversion_flowlines', filesuffix=''):
                 # Bins below present-day glacier assumed to have no lakes
                 else:
                     supra_lake_binned_arr[nbin] = 0
+
+            # The binned raster reflects present-day (observed) lake coverage,
+            # not coverage at the simulation start year. Back-project it using
+            # the same slope-dependent growth rules the forward model uses.
+            SUPRA_LAKE_OBS_YEAR = 2026
+            start_year = pygem_prms['climate']['sim_startyear']
+            n_years = SUPRA_LAKE_OBS_YEAR - start_year
+            growth_rules = load_lake_growth_rules(pygem_prms)
+            supra_lake_binned_arr, n_saturated = backdate_supra_lake_coverage(
+                supra_lake_binned_arr,
+                bed_h=fl.bed_h,
+                surface_h=fl.surface_h,
+                thick=fl.thick,
+                dx_meter=fl.dx_meter,
+                growth_rules=growth_rules,
+                n_years=n_years,
+            )
+            if n_saturated > 0:
+                log.warning(
+                    f'{gdir.rgi_id}: {n_saturated} supraglacial lake bin(s) were already at '
+                    f'the 1.0 coverage cap in {SUPRA_LAKE_OBS_YEAR} -- left unchanged when backdating to '
+                    f'{start_year} since their pre-saturation history cannot be recovered.'
+                )
 
             fl.supra_lake = supra_lake_binned_arr
 

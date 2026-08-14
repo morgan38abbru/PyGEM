@@ -410,6 +410,19 @@ class glacierwide_stats(single_glacier):
             'temporal_resolution': 'annual',
             'comment': 'equilibrium line altitude is the elevation where the climatic mass balance is zero',
         }
+        self.output_coords_dict['glac_proglacial_lake_level'] = collections.OrderedDict(
+            [('glac', self.glac_values)]
+        )
+        self.output_attrs_dict['glac_proglacial_lake_level'] = {
+            'long_name': 'proglacial lake water surface elevation',
+            'units': 'm a.s.l.',
+            'comment': (
+                'fixed prescribed lake water level for actively-calving lake-terminating glaciers '
+                '(existing_growing calibrated lakes, or newly detected/formed lakes); a single value '
+                'since the level is set by geometry/calibration and does not vary by simulation or year; '
+                'NaN for land-terminating, tidewater, or existing_nongrowing glaciers'
+            ),
+        }
         self.output_coords_dict['offglac_runoff'] = collections.OrderedDict(
             [('glac', self.glac_values), ('time', self.time_values)]
         )

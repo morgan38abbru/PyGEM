@@ -710,6 +710,7 @@ def run(list_packed_vars):
                     is_lake_glacier = False   # True only for actively-calving existing_growing lakes
                     is_known_lake = False     # True for ANY row in lake_fa_calibration.csv (growing OR nongrowing)
                     lake_info = None
+                    glac_lake_water_level = np.nan  # single scalar for output; set below if a lake applies
                     if pygem_prms['setup'].get('include_laketerm', False):
                         lake_info = lake.load_lake_calving_data(pygem_prms, rgiid)
                         if lake_info is not None:
@@ -718,6 +719,7 @@ def run(list_packed_vars):
                                 is_lake_glacier = True
                                 calving_k = lake_info['calving_k']
                                 calving_k_values = np.array([calving_k] * nsims)
+                                glac_lake_water_level = lake_info['water_level']
                                 if debug:
                                     print(f'Lake glacier detected: calving_k={calving_k}, '
                                           f'water_level={lake_info["water_level"]}')
@@ -1143,6 +1145,7 @@ def run(list_packed_vars):
 
                                 if year_of_formation is not None:
                                     lake_formed = True
+                                    glac_lake_water_level = wl_trigger
 
                                     # --- Phase 1: clean land run to year before formation ---
                                     lake_start_year = max(year_of_formation - 1, args.sim_startyear)
@@ -1707,6 +1710,7 @@ def run(list_packed_vars):
                                 :, n_iter
                             ]
                             output_ds_all_stats['glac_ELA_annual'].values[0, :] = output_glac_ELA_annual[:, n_iter]
+                            output_ds_all_stats['glac_proglacial_lake_level'].values[0] = glac_lake_water_level
                             output_ds_all_stats['offglac_runoff'].values[0, :] = output_offglac_runoff_steps[:, n_iter]
                             if args.export_extra_vars:
                                 output_ds_all_stats['glac_temp'].values[0, :] = (
@@ -1808,6 +1812,7 @@ def run(list_packed_vars):
                     output_ds_all_stats['glac_mass_annual'].values[0, :] = output_glac_mass_annual_stats[:, 0]
                     output_ds_all_stats['glac_mass_bsl_annual'].values[0, :] = output_glac_mass_bsl_annual_stats[:, 0]
                     output_ds_all_stats['glac_ELA_annual'].values[0, :] = output_glac_ELA_annual_stats[:, 0]
+                    output_ds_all_stats['glac_proglacial_lake_level'].values[0] = glac_lake_water_level
                     output_ds_all_stats['offglac_runoff'].values[0, :] = output_offglac_runoff_steps_stats[:, 0]
                     if args.export_extra_vars:
                         output_ds_all_stats['glac_temp'].values[0, :] = output_glac_temp_steps_stats[:, 0] + 273.15
